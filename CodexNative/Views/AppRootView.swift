@@ -15,6 +15,7 @@ struct AppRootView: View {
                         .font(.headline)
                 }
                 .frame(minWidth: 960, minHeight: 640)
+                .background(GlassPaneBackground(material: .regularMaterial))
 
             case .missing(let discovery):
                 SetupView(discovery: discovery)
@@ -75,20 +76,20 @@ struct WorkbenchView: View {
             SidebarView()
                 .frame(width: 300)
 
-            Divider()
+            GlassDivider(.vertical)
 
             VStack(spacing: 0) {
                 ThreadHeaderView()
-                Divider()
+                GlassDivider(.horizontal)
                 TranscriptView()
-                Divider()
+                GlassDivider(.horizontal)
                 ComposerView()
             }
             .frame(minWidth: 520)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(GlassPaneBackground(material: .ultraThinMaterial, tintOpacity: 0.1))
 
             if store.isInspectorVisible {
-                Divider()
+                GlassDivider(.vertical)
                 InspectorView()
                     .frame(width: 340)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -111,7 +112,7 @@ struct WorkbenchView: View {
                 .help("Inspector")
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(GlassPaneBackground(material: .regularMaterial, tintOpacity: 0.08))
     }
 }
 
@@ -157,7 +158,7 @@ struct ThreadHeaderView: View {
         }
         .padding(.horizontal, 20)
         .frame(height: 64)
-        .background(.bar)
+        .background(GlassPaneBackground(material: .bar, tintOpacity: 0.06))
     }
 
     private var pathTitle: String {
@@ -182,7 +183,7 @@ struct AuthPill: View {
         .font(.caption.weight(.medium))
         .padding(.horizontal, 9)
         .frame(height: 28)
-        .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+        .glassCapsule(material: .thinMaterial, fallback: Color(nsColor: .controlBackgroundColor), shadowOpacity: 0.02)
     }
 
     private var label: String {
@@ -213,5 +214,182 @@ struct AuthPill: View {
         case .unavailable:
             .orange
         }
+    }
+}
+
+struct GlassPaneBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+
+    let material: Material
+    let fallback: Color
+    let tintOpacity: Double
+
+    init(
+        material: Material = .regularMaterial,
+        fallback: Color = Color(nsColor: .windowBackgroundColor),
+        tintOpacity: Double = 0.16
+    ) {
+        self.material = material
+        self.fallback = fallback
+        self.tintOpacity = tintOpacity
+    }
+
+    var body: some View {
+        ZStack {
+            fallback.opacity(reduceTransparency ? 1 : fallbackOpacity)
+
+            if !reduceTransparency {
+                Rectangle()
+                    .fill(material)
+                Rectangle()
+                    .fill(Color.white.opacity(colorScheme == .dark ? 0.015 : tintOpacity))
+            }
+        }
+    }
+
+    private var fallbackOpacity: Double {
+        colorScheme == .dark ? 0.66 : 0.42
+    }
+}
+
+struct GlassDivider: View {
+    enum Orientation {
+        case horizontal
+        case vertical
+    }
+
+    @Environment(\.colorScheme) private var colorScheme
+    let orientation: Orientation
+
+    init(_ orientation: Orientation) {
+        self.orientation = orientation
+    }
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08))
+            .frame(
+                width: orientation == .vertical ? 1 : nil,
+                height: orientation == .horizontal ? 1 : nil
+            )
+    }
+}
+
+struct GlassSurfaceModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+
+    let cornerRadius: CGFloat
+    let material: Material
+    let fallback: Color
+    let strokeOpacity: Double
+    let shadowOpacity: Double
+    let shadowRadius: CGFloat
+    let shadowY: CGFloat
+    let tintOpacity: Double
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(fallback.opacity(reduceTransparency ? 1 : fallbackOpacity))
+
+                if !reduceTransparency {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(material)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(Color.white.opacity(colorScheme == .dark ? 0.02 : tintOpacity))
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(strokeOpacity), lineWidth: 0.7)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(colorScheme == .dark ? 0.04 : 0.24), lineWidth: 0.7)
+            }
+            .shadow(color: Color.black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: shadowY)
+    }
+
+    private var fallbackOpacity: Double {
+        colorScheme == .dark ? 0.62 : 0.36
+    }
+}
+
+struct GlassCapsuleModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+
+    let material: Material
+    let fallback: Color
+    let strokeOpacity: Double
+    let shadowOpacity: Double
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                Capsule()
+                    .fill(fallback.opacity(reduceTransparency ? 1 : fallbackOpacity))
+
+                if !reduceTransparency {
+                    Capsule()
+                        .fill(material)
+                    Capsule()
+                        .fill(Color.white.opacity(colorScheme == .dark ? 0.02 : 0.14))
+                }
+            }
+            .overlay {
+                Capsule()
+                    .strokeBorder(Color.primary.opacity(strokeOpacity), lineWidth: 0.7)
+            }
+            .shadow(color: Color.black.opacity(shadowOpacity), radius: 8, x: 0, y: 3)
+    }
+
+    private var fallbackOpacity: Double {
+        colorScheme == .dark ? 0.62 : 0.36
+    }
+}
+
+extension View {
+    func glassSurface(
+        cornerRadius: CGFloat = 12,
+        material: Material = .regularMaterial,
+        fallback: Color = Color(nsColor: .controlBackgroundColor),
+        strokeOpacity: Double = 0.08,
+        shadowOpacity: Double = 0.06,
+        shadowRadius: CGFloat = 16,
+        shadowY: CGFloat = 6,
+        tintOpacity: Double = 0.12
+    ) -> some View {
+        modifier(
+            GlassSurfaceModifier(
+                cornerRadius: cornerRadius,
+                material: material,
+                fallback: fallback,
+                strokeOpacity: strokeOpacity,
+                shadowOpacity: shadowOpacity,
+                shadowRadius: shadowRadius,
+                shadowY: shadowY,
+                tintOpacity: tintOpacity
+            )
+        )
+    }
+
+    func glassCapsule(
+        material: Material = .thinMaterial,
+        fallback: Color = Color(nsColor: .controlBackgroundColor),
+        strokeOpacity: Double = 0.08,
+        shadowOpacity: Double = 0.04
+    ) -> some View {
+        modifier(
+            GlassCapsuleModifier(
+                material: material,
+                fallback: fallback,
+                strokeOpacity: strokeOpacity,
+                shadowOpacity: shadowOpacity
+            )
+        )
     }
 }

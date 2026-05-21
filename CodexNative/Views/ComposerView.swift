@@ -103,16 +103,20 @@ struct ComposerView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
             }
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08))
-            }
-            .shadow(color: Color.black.opacity(0.05), radius: 18, y: 8)
+            .glassSurface(
+                cornerRadius: 16,
+                material: .regularMaterial,
+                fallback: Color(nsColor: .textBackgroundColor),
+                strokeOpacity: 0.1,
+                shadowOpacity: 0.09,
+                shadowRadius: 24,
+                shadowY: 10,
+                tintOpacity: 0.16
+            )
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(GlassPaneBackground(material: .ultraThinMaterial, tintOpacity: 0.08))
         .fileImporter(
             isPresented: $isImportingImage,
             allowedContentTypes: [.image],
@@ -155,7 +159,16 @@ struct ComposerMenu<Content: View>: View {
             .font(.caption)
             .padding(.horizontal, 9)
             .frame(width: width, height: 28)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .glassSurface(
+                cornerRadius: 8,
+                material: .thinMaterial,
+                fallback: Color(nsColor: .controlBackgroundColor),
+                strokeOpacity: 0.05,
+                shadowOpacity: 0,
+                shadowRadius: 0,
+                shadowY: 0,
+                tintOpacity: 0.08
+            )
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -198,7 +211,12 @@ struct AttachmentChip: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 26)
-        .background(Color.accentColor.opacity(0.11), in: Capsule())
+        .glassCapsule(
+            material: .thinMaterial,
+            fallback: Color.accentColor.opacity(0.11),
+            strokeOpacity: 0.08,
+            shadowOpacity: 0.01
+        )
     }
 }
 
@@ -237,9 +255,18 @@ struct ApprovalBanner: View {
             .buttonStyle(.borderedProminent)
         }
         .padding(10)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .glassSurface(
+            cornerRadius: 12,
+            material: .thinMaterial,
+            fallback: Color.orange.opacity(0.12),
+            strokeOpacity: 0.08,
+            shadowOpacity: 0.04,
+            shadowRadius: 12,
+            shadowY: 4,
+            tintOpacity: 0.08
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.orange.opacity(0.18))
         }
     }

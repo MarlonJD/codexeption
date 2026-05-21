@@ -32,7 +32,7 @@ struct TranscriptView: View {
                 .padding(.vertical, 24)
                 .frame(maxWidth: .infinity)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(GlassPaneBackground(material: .ultraThinMaterial, tintOpacity: 0.05))
             .onChange(of: store.selectedThread?.transcriptItems.last?.id) { _, id in
                 guard let id else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -53,13 +53,21 @@ struct EmptyTranscriptView: View {
     var body: some View {
         VStack(spacing: 16) {
             ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
                 Image(systemName: "bubble.left.and.bubble.right")
                     .font(.system(size: 32, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             .frame(width: 76, height: 64)
+            .glassSurface(
+                cornerRadius: 20,
+                material: .thinMaterial,
+                fallback: Color(nsColor: .controlBackgroundColor),
+                strokeOpacity: 0.06,
+                shadowOpacity: 0.04,
+                shadowRadius: 14,
+                shadowY: 6,
+                tintOpacity: 0.08
+            )
 
             VStack(spacing: 5) {
                 Text("Sohbet sec veya yeni bir mesaj yaz")
@@ -165,7 +173,16 @@ struct MarkdownBlocksView: View {
                         .textSelection(.enabled)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .glassSurface(
+                            cornerRadius: 9,
+                            material: .thinMaterial,
+                            fallback: Color(nsColor: .controlBackgroundColor),
+                            strokeOpacity: 0.05,
+                            shadowOpacity: 0,
+                            shadowRadius: 0,
+                            shadowY: 0,
+                            tintOpacity: 0.06
+                        )
                 } else {
                     Text(block.content)
                         .textSelection(.enabled)
@@ -211,7 +228,16 @@ struct CommandOutputView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
-                    .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .glassSurface(
+                        cornerRadius: 9,
+                        material: .thinMaterial,
+                        fallback: Color.black.opacity(0.06),
+                        strokeOpacity: 0.05,
+                        shadowOpacity: 0,
+                        shadowRadius: 0,
+                        shadowY: 0,
+                        tintOpacity: 0.04
+                    )
             }
         }
     }
@@ -256,7 +282,16 @@ struct LiveChangeSummaryView: View {
                 }
             }
             .padding(12)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .glassSurface(
+                cornerRadius: 12,
+                material: .thinMaterial,
+                fallback: Color(nsColor: .controlBackgroundColor),
+                strokeOpacity: 0.06,
+                shadowOpacity: 0.03,
+                shadowRadius: 10,
+                shadowY: 4,
+                tintOpacity: 0.08
+            )
         }
         .animation(.snappy(duration: 0.28), value: summary)
     }

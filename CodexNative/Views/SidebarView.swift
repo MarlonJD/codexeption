@@ -50,7 +50,7 @@ struct SidebarView: View {
             SidebarAccountCard()
                 .padding(12)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(GlassPaneBackground(material: .regularMaterial, tintOpacity: 0.18))
     }
 }
 
@@ -98,11 +98,16 @@ struct SidebarTopBar: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06))
-            }
+            .glassSurface(
+                cornerRadius: 9,
+                material: .thinMaterial,
+                fallback: Color(nsColor: .controlBackgroundColor),
+                strokeOpacity: 0.06,
+                shadowOpacity: 0.02,
+                shadowRadius: 8,
+                shadowY: 3,
+                tintOpacity: 0.08
+            )
 
             Button {
             } label: {
@@ -117,7 +122,7 @@ struct SidebarTopBar: View {
             .disabled(true)
         }
         .padding(14)
-        .background(.bar)
+        .background(GlassPaneBackground(material: .bar, tintOpacity: 0.08))
     }
 }
 
@@ -170,6 +175,12 @@ struct ProjectFilterRow: View {
             .padding(.horizontal, 9)
             .frame(height: 42)
             .background(rowBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.16), lineWidth: 0.7)
+                }
+            }
         }
         .buttonStyle(.plain)
     }
@@ -306,11 +317,16 @@ struct SidebarAccountCard: View {
             }
         }
         .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.primary.opacity(0.06))
-        }
+        .glassSurface(
+            cornerRadius: 12,
+            material: .thinMaterial,
+            fallback: Color(nsColor: .controlBackgroundColor),
+            strokeOpacity: 0.07,
+            shadowOpacity: 0.04,
+            shadowRadius: 12,
+            shadowY: 4,
+            tintOpacity: 0.1
+        )
     }
 
     private var iconName: String {

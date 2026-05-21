@@ -17,8 +17,9 @@ struct InspectorView: View {
                 .help("Kapat")
             }
             .padding(14)
+            .background(GlassPaneBackground(material: .bar, fallback: Color(nsColor: .controlBackgroundColor), tintOpacity: 0.07))
 
-            Divider()
+            GlassDivider(.horizontal)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -29,7 +30,7 @@ struct InspectorView: View {
                 .padding(14)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(GlassPaneBackground(material: .regularMaterial, fallback: Color(nsColor: .controlBackgroundColor), tintOpacity: 0.12))
     }
 }
 
@@ -63,6 +64,18 @@ struct GitStatusPanel: View {
                 }
             }
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassSurface(
+            cornerRadius: 12,
+            material: .thinMaterial,
+            fallback: Color(nsColor: .controlBackgroundColor),
+            strokeOpacity: 0.06,
+            shadowOpacity: 0.02,
+            shadowRadius: 9,
+            shadowY: 3,
+            tintOpacity: 0.08
+        )
     }
 }
 
@@ -92,6 +105,18 @@ struct ResourcesPanel: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassSurface(
+            cornerRadius: 12,
+            material: .thinMaterial,
+            fallback: Color(nsColor: .controlBackgroundColor),
+            strokeOpacity: 0.06,
+            shadowOpacity: 0.02,
+            shadowRadius: 9,
+            shadowY: 3,
+            tintOpacity: 0.08
+        )
     }
 }
 
@@ -122,6 +147,18 @@ struct DiffPanel: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassSurface(
+            cornerRadius: 12,
+            material: .thinMaterial,
+            fallback: Color(nsColor: .controlBackgroundColor),
+            strokeOpacity: 0.06,
+            shadowOpacity: 0.02,
+            shadowRadius: 9,
+            shadowY: 3,
+            tintOpacity: 0.08
+        )
     }
 }
 
@@ -142,7 +179,16 @@ struct DiffLinesView: View {
                 }
             }
         }
-        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .glassSurface(
+            cornerRadius: 9,
+            material: .thinMaterial,
+            fallback: Color(nsColor: .textBackgroundColor),
+            strokeOpacity: 0.05,
+            shadowOpacity: 0,
+            shadowRadius: 0,
+            shadowY: 0,
+            tintOpacity: 0.06
+        )
     }
 
     private var lines: [DiffLine] {
