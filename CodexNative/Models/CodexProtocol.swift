@@ -221,6 +221,7 @@ struct ThreadDTO: Decodable, Sendable {
     let createdAt: Double
     let updatedAt: Double
     let status: String
+    let archived: Bool
     let path: String?
     let cwd: String
     let cliVersion: String?
@@ -236,6 +237,7 @@ struct ThreadDTO: Decodable, Sendable {
         case createdAt
         case updatedAt
         case status
+        case archived
         case path
         case cwd
         case cliVersion
@@ -253,6 +255,7 @@ struct ThreadDTO: Decodable, Sendable {
         createdAt = try container.decodeIfPresent(Double.self, forKey: .createdAt) ?? 0
         updatedAt = try container.decodeIfPresent(Double.self, forKey: .updatedAt) ?? createdAt
         status = try container.decodeFlexibleString(forKey: .status) ?? "unknown"
+        archived = try container.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         path = try container.decodeIfPresent(String.self, forKey: .path)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? FileManager.default.homeDirectoryForCurrentUser.path
         cliVersion = try container.decodeIfPresent(String.self, forKey: .cliVersion)
@@ -267,7 +270,7 @@ struct ThreadDTO: Decodable, Sendable {
             preview: preview,
             cwd: cwd,
             modelProvider: modelProvider,
-            status: status,
+            status: archived ? "archived" : status,
             createdAt: Date(timeIntervalSince1970: createdAt),
             updatedAt: Date(timeIntervalSince1970: updatedAt)
         )

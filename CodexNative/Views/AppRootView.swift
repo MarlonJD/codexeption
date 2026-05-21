@@ -143,7 +143,7 @@ struct ThreadHeaderView: View {
 
             AuthPill(status: store.authStatus)
 
-            if store.isLoading {
+            if store.isLoading || store.isSelectedThreadLoading {
                 ProgressView()
                     .controlSize(.small)
             }

@@ -38,12 +38,22 @@ final class CodexStore: ObservableObject {
     @Published var composerText = ""
     @Published var imageAttachments: [URL] = []
     @Published var presentedError: PresentedError?
+    @Published var expandedProjectIDs: Set<String> = []
+    @Published var loadingThreadID: String?
 
     private var client: CodexClient?
     private var eventTask: Task<Void, Never>?
     private var bootstrapTask: Task<Void, Never>?
     private var configuredCodexPath: String?
     private var bookmarkedProjects: [Project] = []
+    private var projectOrder: [String] = []
+    private var hasStoredExpandedProjects = false
+    private let projectOrderKey = "CodexNative.projectOrder"
+    private let expandedProjectsKey = "CodexNative.expandedProjects"
+
+    init() {
+        loadSidebarState()
+    }
 
     var selectedProject: Project? {
         projects.first { $0.id == selectedProjectID }
@@ -51,6 +61,7 @@ final class CodexStore: ObservableObject {
 
     var visibleThreads: [ThreadSummary] {
         threads.filter { thread in
+            guard !thread.isArchived else { return false }
             let projectMatches = selectedProjectID == nil || thread.cwd == selectedProjectID
             let term = searchTerm.trimmingCharacters(in: .whitespacesAndNewlines)
             guard projectMatches else { return false }
@@ -59,6 +70,19 @@ final class CodexStore: ObservableObject {
                 || thread.preview.localizedCaseInsensitiveContains(term)
                 || thread.cwd.localizedCaseInsensitiveContains(term)
         }
+        .sorted(by: sortThreadsByRecentActivity)
+    }
+
+    var isSelectedThreadLoading: Bool {
+        selectedThreadID != nil && loadingThreadID == selectedThreadID
+    }
+
+    var selectedTurnActivityTitle: String? {
+        guard loadingThreadID == nil else { return nil }
+        if let turn = selectedThread?.turns.last(where: \.isActive) {
+            return turn.isWritingAssistantMessage ? "Yanit yaziyor" : "Dusunuyor"
+        }
+        return nil
     }
 
     var currentReasoningEfforts: [String] {
@@ -68,6 +92,13 @@ final class CodexStore: ObservableObject {
         }
         var seen = Set<String>()
         return model.supportedReasoningEfforts.filter { seen.insert($0).inserted }
+    }
+
+    private func sortThreadsByRecentActivity(_ lhs: ThreadSummary, _ rhs: ThreadSummary) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt
+        }
+        return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
 
     func start(modelContext: ModelContext) {
@@ -90,8 +121,17 @@ final class CodexStore: ObservableObject {
         guard let id else {
             selectedThread = nil
             liveChangeSummary = nil
+            loadingThreadID = nil
             return
         }
+
+        if let thread = threads.first(where: { $0.id == id }) {
+            selectedProjectID = thread.cwd
+            expandedProjectIDs.insert(thread.cwd)
+            saveExpandedProjects()
+            selectedThread = ThreadDetail(id: thread.id, summary: thread, turns: [])
+        }
+        loadingThreadID = id
 
         Task { await openThread(id: id) }
     }
@@ -99,8 +139,49 @@ final class CodexStore: ObservableObject {
     func selectProject(_ id: String?) {
         selectedProjectID = id
         liveChangeSummary = nil
-        let nextThreadID = visibleThreads.first?.id
-        selectThread(nextThreadID)
+    }
+
+    func toggleProject(_ id: String) {
+        selectedProjectID = id
+        liveChangeSummary = nil
+        if expandedProjectIDs.contains(id) {
+            expandedProjectIDs.remove(id)
+        } else {
+            expandedProjectIDs.insert(id)
+        }
+        saveExpandedProjects()
+    }
+
+    func isProjectExpanded(_ id: String) -> Bool {
+        expandedProjectIDs.contains(id)
+    }
+
+    func threads(forProject id: String) -> [ThreadSummary] {
+        threads.filter { thread in
+            guard !thread.isArchived else { return false }
+            guard thread.cwd == id else { return false }
+            let term = searchTerm.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !term.isEmpty else { return true }
+            return thread.title.localizedCaseInsensitiveContains(term)
+                || thread.preview.localizedCaseInsensitiveContains(term)
+                || thread.cwd.localizedCaseInsensitiveContains(term)
+        }
+        .sorted(by: sortThreadsByRecentActivity)
+    }
+
+    func moveProject(_ draggedID: String, before targetID: String) {
+        guard draggedID != targetID,
+              let fromIndex = projects.firstIndex(where: { $0.id == draggedID }) else {
+            return
+        }
+
+        var ordered = projects
+        let dragged = ordered.remove(at: fromIndex)
+        let targetIndex = ordered.firstIndex(where: { $0.id == targetID }) ?? ordered.endIndex
+        ordered.insert(dragged, at: targetIndex)
+        projects = ordered
+        projectOrder = ordered.map(\.id)
+        saveProjectOrder()
     }
 
     func selectModel(_ id: String) {
@@ -278,6 +359,24 @@ final class CodexStore: ObservableObject {
         }
     }
 
+    private func loadSidebarState() {
+        let defaults = UserDefaults.standard
+        projectOrder = defaults.stringArray(forKey: projectOrderKey) ?? []
+        if let expanded = defaults.array(forKey: expandedProjectsKey) as? [String] {
+            expandedProjectIDs = Set(expanded)
+            hasStoredExpandedProjects = true
+        }
+    }
+
+    private func saveProjectOrder() {
+        UserDefaults.standard.set(projectOrder, forKey: projectOrderKey)
+    }
+
+    private func saveExpandedProjects() {
+        UserDefaults.standard.set(Array(expandedProjectIDs), forKey: expandedProjectsKey)
+        hasStoredExpandedProjects = true
+    }
+
     private func loadInitialData() async {
         isLoading = true
 
@@ -310,8 +409,20 @@ final class CodexStore: ObservableObject {
     }
 
     private func openThread(id: String) async {
-        await perform { [self] in
+        loadingThreadID = id
+        if await loadLocalThreadDetail(id: id) {
+            return
+        }
+
+        do {
             try await loadThreadDetail(id: id)
+        } catch {
+            if selectedThreadID == id {
+                presentedError = PresentedError(message: "Sohbet acilamadi: \(error.localizedDescription)")
+            }
+            if loadingThreadID == id {
+                loadingThreadID = nil
+            }
         }
     }
 
@@ -389,6 +500,8 @@ final class CodexStore: ObservableObject {
 
     private func applyThreadSummaries(_ summaries: [ThreadSummary]) {
         threads = summaries
+            .filter { !$0.isArchived }
+            .sorted(by: sortThreadsByRecentActivity)
         deriveProjects()
         if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
             self.selectedProjectID = nil
@@ -437,6 +550,11 @@ final class CodexStore: ObservableObject {
             selectedThreadID = nil
             selectedThread = nil
             liveChangeSummary = nil
+            loadingThreadID = nil
+            return
+        }
+
+        if await loadLocalThreadDetail(id: threadID) {
             return
         }
 
@@ -446,16 +564,35 @@ final class CodexStore: ObservableObject {
             selectedThreadID = nil
             selectedThread = nil
             liveChangeSummary = nil
-            presentedError = PresentedError(message: "Sohbet acilamadi: \(error.localizedDescription)")
+            loadingThreadID = nil
         }
     }
 
     private func loadThreadDetail(id: String) async throws {
         let detail = try await requireClient().readThread(id: id)
-        selectedThread = detail
-        selectedThreadID = id
-        liveChangeSummary = nil
+        applyThreadDetail(detail)
         await refreshGitStatus(cwd: detail.summary.cwd)
+    }
+
+    private func loadLocalThreadDetail(id: String) async -> Bool {
+        guard let detail = await LocalCodexHistoryReader.readDetail(id: id) else {
+            return false
+        }
+        applyThreadDetail(detail)
+        await refreshGitStatus(cwd: detail.summary.cwd)
+        return true
+    }
+
+    private func applyThreadDetail(_ detail: ThreadDetail) {
+        selectedThread = detail
+        selectedThreadID = detail.id
+        selectedProjectID = detail.summary.cwd
+        expandedProjectIDs.insert(detail.summary.cwd)
+        saveExpandedProjects()
+        liveChangeSummary = nil
+        if loadingThreadID == detail.id {
+            loadingThreadID = nil
+        }
     }
 
     private func refreshGitStatus(cwd: String) async {
@@ -485,7 +622,7 @@ final class CodexStore: ObservableObject {
         case .threadStatusChanged(let threadID, let status):
             if let index = threads.firstIndex(where: { $0.id == threadID }) {
                 let existing = threads[index]
-                threads[index] = ThreadSummary(
+                let updated = ThreadSummary(
                     id: existing.id,
                     title: existing.title,
                     preview: existing.preview,
@@ -495,6 +632,12 @@ final class CodexStore: ObservableObject {
                     createdAt: existing.createdAt,
                     updatedAt: existing.updatedAt
                 )
+                if updated.isArchived {
+                    threads.remove(at: index)
+                    deriveProjects()
+                } else {
+                    threads[index] = updated
+                }
             }
 
         case .turnStarted(let threadID, let turn):
@@ -682,11 +825,18 @@ final class CodexStore: ObservableObject {
     }
 
     private func upsertThread(_ thread: ThreadSummary) {
+        if thread.isArchived {
+            threads.removeAll { $0.id == thread.id }
+            deriveProjects()
+            return
+        }
+
         if let index = threads.firstIndex(where: { $0.id == thread.id }) {
             threads[index] = thread
         } else {
             threads.insert(thread, at: 0)
         }
+        threads.sort(by: sortThreadsByRecentActivity)
     }
 
     private func pendingThreadSummary(id: String, text: String, attachments: [URL], cwd: String?) -> ThreadSummary {
@@ -716,14 +866,34 @@ final class CodexStore: ObservableObject {
     }
 
     private func deriveProjects() {
-        let grouped = Dictionary(grouping: threads, by: \.cwd)
+        let grouped = Dictionary(grouping: threads.filter { !$0.isArchived }, by: \.cwd)
         var merged = Dictionary(uniqueKeysWithValues: bookmarkedProjects.map { ($0.path, $0) })
         for (path, threads) in grouped {
             merged[path] = Project(path: path, threadCount: threads.count)
         }
 
-        projects = merged.values
+        let alphabeticProjects = merged.values
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        let ranks = Dictionary(uniqueKeysWithValues: projectOrder.enumerated().map { ($0.element, $0.offset) })
+        projects = alphabeticProjects.sorted { lhs, rhs in
+            switch (ranks[lhs.id], ranks[rhs.id]) {
+            case let (left?, right?):
+                return left < right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            case (nil, nil):
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+        }
+        projectOrder = projects.map(\.id)
+        saveProjectOrder()
+
+        if !hasStoredExpandedProjects {
+            expandedProjectIDs = Set(projects.prefix(3).map(\.id))
+            saveExpandedProjects()
+        }
     }
 
     private func requireClient() throws -> CodexClient {

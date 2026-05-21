@@ -116,7 +116,12 @@ actor CodexClient {
             timeoutNanoseconds: Self.requestTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
-        return response.data.map(\.summary)
+        return response.data
+            .map(\.summary)
+            .filter { !$0.isArchived }
+            .sorted { lhs, rhs in
+                lhs.updatedAt == rhs.updatedAt ? lhs.title < rhs.title : lhs.updatedAt > rhs.updatedAt
+            }
     }
 
     func readThread(id: String) async throws -> ThreadDetail {

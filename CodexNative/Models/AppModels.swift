@@ -13,6 +13,11 @@ struct Project: Identifiable, Hashable, Sendable {
         self.displayName = URL(fileURLWithPath: path).lastPathComponent
         self.threadCount = threadCount
     }
+
+    var parentDisplayName: String? {
+        let parent = URL(fileURLWithPath: path).deletingLastPathComponent().lastPathComponent
+        return parent.isEmpty ? nil : parent
+    }
 }
 
 struct ThreadSummary: Identifiable, Hashable, Sendable {
@@ -24,6 +29,11 @@ struct ThreadSummary: Identifiable, Hashable, Sendable {
     let status: String
     let createdAt: Date
     let updatedAt: Date
+
+    var isArchived: Bool {
+        let normalized = status.lowercased()
+        return normalized == "archived" || normalized == "archive"
+    }
 }
 
 enum AuthStatus: Equatable, Sendable {
@@ -88,6 +98,17 @@ struct CodexTurn: Identifiable, Sendable {
     var startedAt: Date?
     var completedAt: Date?
     var durationMs: Int?
+
+    var isActive: Bool {
+        let normalized = status.lowercased()
+        return !["completed", "failed", "cancelled", "canceled"].contains(normalized)
+    }
+
+    var isWritingAssistantMessage: Bool {
+        items.contains { item in
+            item.kind == .assistant && !item.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
 }
 
 enum TranscriptKind: String, Codable, Sendable {
