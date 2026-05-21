@@ -132,25 +132,38 @@ final class CodexStore: ObservableObject {
 
         let text = composerText
         let attachments = imageAttachments
+        let cwd = selectedProject?.path
+        let modelID = selectedModelID
+        let effort = selectedReasoningEffort
+        let mode = permissionMode
+        let isNewThread = selectedThreadID == nil
+        let pendingThreadID = selectedThreadID ?? "pending-thread-\(UUID().uuidString)"
         composerText = ""
         imageAttachments.removeAll()
+
+        if isNewThread {
+            let summary = pendingThreadSummary(id: pendingThreadID, text: text, attachments: attachments, cwd: cwd)
+            upsertThread(summary)
+            deriveProjects()
+            selectedThreadID = pendingThreadID
+            selectedThread = ThreadDetail(id: pendingThreadID, summary: summary, turns: [])
+        }
+        let pending = appendPendingUserTurn(threadID: pendingThreadID, text: text, attachments: attachments)
 
         Task {
             await perform { [self] in
                 let threadID: String
-                if let selectedThreadID {
-                    threadID = selectedThreadID
-                } else {
+                if isNewThread {
                     let thread = try await requireClient().startThread(
-                        cwd: selectedProject?.path,
-                        model: selectedModelID,
-                        permissionMode: permissionMode
+                        cwd: cwd,
+                        model: modelID,
+                        permissionMode: mode
                     )
-                    upsertThread(thread)
-                    selectedThreadID = thread.id
-                    selectedThread = ThreadDetail(id: thread.id, summary: thread, turns: [])
+                    promotePendingThread(pendingThreadID, to: thread)
                     liveChangeSummary = nil
                     threadID = thread.id
+                } else {
+                    threadID = pendingThreadID
                 }
 
                 var input: [UserInputDTO] = []
@@ -162,13 +175,13 @@ final class CodexStore: ObservableObject {
                 let turn = try await requireClient().startTurn(
                     threadID: threadID,
                     input: input,
-                    cwd: selectedProject?.path,
-                    model: selectedModelID,
-                    effort: selectedReasoningEffort,
-                    permissionMode: permissionMode
+                    cwd: cwd,
+                    model: modelID,
+                    effort: effort,
+                    permissionMode: mode
                 )
                 liveChangeSummary = nil
-                appendOrReplaceTurn(turn, threadID: threadID)
+                replacePendingTurn(pending.turnID, with: turn, threadID: threadID, fallbackUserItem: pending.userItem)
             }
         }
     }
@@ -556,6 +569,81 @@ final class CodexStore: ObservableObject {
         selectedThread = detail
     }
 
+    private func appendPendingUserTurn(threadID: String, text: String, attachments: [URL]) -> (turnID: String, userItem: TranscriptItem) {
+        let turnID = "pending-turn-\(UUID().uuidString)"
+        let userItem = TranscriptItem(
+            id: "pending-user-\(UUID().uuidString)",
+            kind: .user,
+            title: "Sen",
+            body: pendingUserBody(text: text, attachments: attachments),
+            detail: nil,
+            timestamp: .now
+        )
+        let turn = CodexTurn(id: turnID, status: "pending", items: [userItem], startedAt: .now, completedAt: nil, durationMs: nil)
+
+        if selectedThread == nil || selectedThread?.id != threadID {
+            let summary = threads.first(where: { $0.id == threadID })
+                ?? pendingThreadSummary(id: threadID, text: text, attachments: attachments, cwd: selectedProject?.path)
+            selectedThreadID = threadID
+            selectedThread = ThreadDetail(id: threadID, summary: summary, turns: [])
+        }
+
+        if var detail = selectedThread {
+            detail.turns.append(turn)
+            selectedThread = detail
+        }
+        return (turnID, userItem)
+    }
+
+    private func replacePendingTurn(_ pendingTurnID: String, with turn: CodexTurn, threadID: String, fallbackUserItem: TranscriptItem) {
+        guard selectedThreadID == threadID else {
+            appendOrReplaceTurn(turn, threadID: threadID)
+            return
+        }
+        if selectedThread == nil, let summary = threads.first(where: { $0.id == threadID }) {
+            selectedThread = ThreadDetail(id: threadID, summary: summary, turns: [])
+        }
+
+        guard var detail = selectedThread else { return }
+        var mergedTurn = turn
+        detail.turns.removeAll { $0.id == pendingTurnID }
+        if let index = detail.turns.firstIndex(where: { $0.id == turn.id }) {
+            mergedTurn.items = mergedTranscriptItems(existing: detail.turns[index].items, incoming: turn.items)
+            if !mergedTurn.items.contains(where: { $0.kind == .user }) {
+                mergedTurn.items.insert(fallbackUserItem, at: 0)
+            }
+            detail.turns[index] = mergedTurn
+        } else {
+            if !mergedTurn.items.contains(where: { $0.kind == .user }) {
+                mergedTurn.items.insert(fallbackUserItem, at: 0)
+            }
+            detail.turns.append(mergedTurn)
+        }
+        selectedThread = detail
+    }
+
+    private func mergedTranscriptItems(existing: [TranscriptItem], incoming: [TranscriptItem]) -> [TranscriptItem] {
+        var items = existing
+        for item in incoming {
+            if let index = items.firstIndex(where: { $0.id == item.id }) {
+                items[index] = item
+            } else {
+                items.append(item)
+            }
+        }
+        return items
+    }
+
+    private func promotePendingThread(_ pendingThreadID: String, to thread: ThreadSummary) {
+        threads.removeAll { $0.id == pendingThreadID }
+        upsertThread(thread)
+        deriveProjects()
+        guard selectedThreadID == pendingThreadID else { return }
+        let turns = selectedThread?.turns ?? []
+        selectedThreadID = thread.id
+        selectedThread = ThreadDetail(id: thread.id, summary: thread, turns: turns)
+    }
+
     private func upsertItem(threadID: String, turnID: String, item: TranscriptItem) {
         guard selectedThreadID == threadID else { return }
         if selectedThread == nil, let summary = threads.first(where: { $0.id == threadID }) {
@@ -599,6 +687,32 @@ final class CodexStore: ObservableObject {
         } else {
             threads.insert(thread, at: 0)
         }
+    }
+
+    private func pendingThreadSummary(id: String, text: String, attachments: [URL], cwd: String?) -> ThreadSummary {
+        let body = pendingUserBody(text: text, attachments: attachments)
+        let title = String(body.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        let now = Date()
+        return ThreadSummary(
+            id: id,
+            title: title.isEmpty ? "Yeni sohbet" : title,
+            preview: body,
+            cwd: cwd ?? FileManager.default.homeDirectoryForCurrentUser.path,
+            modelProvider: "openai",
+            status: "pending",
+            createdAt: now,
+            updatedAt: now
+        )
+    }
+
+    private func pendingUserBody(text: String, attachments: [URL]) -> String {
+        var lines: [String] = []
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            lines.append(trimmed)
+        }
+        lines.append(contentsOf: attachments.map { "[Gorsel] \($0.path)" })
+        return lines.joined(separator: "\n")
     }
 
     private func deriveProjects() {
