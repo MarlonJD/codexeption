@@ -31,6 +31,7 @@ enum AuthStatus: Equatable, Sendable {
     case signedOut
     case signingIn(String)
     case signedIn(method: String)
+    case unavailable(String)
 
     var title: String {
         switch self {
@@ -42,6 +43,8 @@ enum AuthStatus: Equatable, Sendable {
             "Giris bekleniyor"
         case .signedIn(let method):
             "\(method.uppercased()) bagli"
+        case .unavailable:
+            "Auth okunamadi"
         }
     }
 
@@ -55,7 +58,16 @@ enum AuthStatus: Equatable, Sendable {
             message
         case .signedIn:
             "Yerel Codex oturumu hazir"
+        case .unavailable(let message):
+            message
         }
+    }
+
+    var canStartTurns: Bool {
+        if case .signedIn = self {
+            return true
+        }
+        return false
     }
 }
 

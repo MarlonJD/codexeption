@@ -33,6 +33,9 @@ enum CodexEvent: Sendable {
 
 actor CodexClient {
     nonisolated let events: AsyncStream<CodexEvent>
+    private static let startupTimeoutNanoseconds: UInt64 = 60_000_000_000
+    private static let requestTimeoutNanoseconds: UInt64 = 60_000_000_000
+    private static let mutationTimeoutNanoseconds: UInt64 = 180_000_000_000
 
     private let binaryURL: URL
     private let idleShutdownNanoseconds: UInt64
@@ -73,7 +76,12 @@ actor CodexClient {
                 optOutNotificationMethods: nil
             )
         )
-        let _: InitializeResponse = try await transport.request("initialize", params: params, response: InitializeResponse.self)
+        let _: InitializeResponse = try await transport.request(
+            "initialize",
+            params: params,
+            response: InitializeResponse.self,
+            timeoutNanoseconds: Self.startupTimeoutNanoseconds
+        )
         try await transport.notify("initialized")
         initialized = true
         scheduleIdleShutdownIfQuiet()
@@ -102,7 +110,8 @@ actor CodexClient {
                 useStateDbOnly: false,
                 searchTerm: searchTerm
             ),
-            response: ThreadListResponseDTO.self
+            response: ThreadListResponseDTO.self,
+            timeoutNanoseconds: Self.requestTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
         return response.data.map(\.summary)
@@ -113,7 +122,8 @@ actor CodexClient {
         let response: ThreadReadResponseDTO = try await requireTransport().request(
             "thread/read",
             params: ThreadReadParams(threadId: id, includeTurns: true),
-            response: ThreadReadResponseDTO.self
+            response: ThreadReadResponseDTO.self,
+            timeoutNanoseconds: Self.requestTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
         return response.thread.detail
@@ -132,7 +142,8 @@ actor CodexClient {
                 ephemeral: false,
                 sessionStartSource: nil
             ),
-            response: ThreadStartResponseDTO.self
+            response: ThreadStartResponseDTO.self,
+            timeoutNanoseconds: Self.mutationTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
         return response.thread.summary
@@ -143,7 +154,8 @@ actor CodexClient {
         let response: ThreadResumeResponseDTO = try await requireTransport().request(
             "thread/resume",
             params: ThreadResumeParams(threadId: id, model: model, cwd: nil, approvalPolicy: approvalPolicy),
-            response: ThreadResumeResponseDTO.self
+            response: ThreadResumeResponseDTO.self,
+            timeoutNanoseconds: Self.requestTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
         return response.thread.detail
@@ -154,7 +166,8 @@ actor CodexClient {
         let _: EmptyResponse = try await requireTransport().request(
             "thread/archive",
             params: ThreadArchiveParams(threadId: id),
-            response: EmptyResponse.self
+            response: EmptyResponse.self,
+            timeoutNanoseconds: Self.mutationTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
     }
@@ -164,7 +177,8 @@ actor CodexClient {
         let _: EmptyResponse = try await requireTransport().request(
             "thread/name/set",
             params: ThreadSetNameParams(threadId: id, name: name),
-            response: EmptyResponse.self
+            response: EmptyResponse.self,
+            timeoutNanoseconds: Self.mutationTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
     }
@@ -174,7 +188,8 @@ actor CodexClient {
         let response: TurnStartResponseDTO = try await requireTransport().request(
             "turn/start",
             params: TurnStartParams(threadId: threadID, input: input, cwd: cwd, approvalPolicy: approvalPolicy, model: model, effort: effort),
-            response: TurnStartResponseDTO.self
+            response: TurnStartResponseDTO.self,
+            timeoutNanoseconds: Self.mutationTimeoutNanoseconds
         )
         activeTurnIDs.insert(response.turn.id)
         return response.turn.model
@@ -185,7 +200,8 @@ actor CodexClient {
         let _: EmptyResponse = try await requireTransport().request(
             "turn/interrupt",
             params: TurnInterruptParams(threadId: threadID, turnId: turnID),
-            response: EmptyResponse.self
+            response: EmptyResponse.self,
+            timeoutNanoseconds: Self.mutationTimeoutNanoseconds
         )
         activeTurnIDs.remove(turnID)
         scheduleIdleShutdownIfQuiet()
@@ -196,7 +212,8 @@ actor CodexClient {
         let response: ModelListResponseDTO = try await requireTransport().request(
             "model/list",
             params: ModelListParams(cursor: nil, limit: nil, includeHidden: false),
-            response: ModelListResponseDTO.self
+            response: ModelListResponseDTO.self,
+            timeoutNanoseconds: Self.requestTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
         return response.data.filter { !$0.hidden }.map(\.option)
@@ -207,7 +224,8 @@ actor CodexClient {
         let response: ConfigReadResponseDTO = try await requireTransport().request(
             "config/read",
             params: ConfigReadParams(includeLayers: true, cwd: cwd),
-            response: ConfigReadResponseDTO.self
+            response: ConfigReadResponseDTO.self,
+            timeoutNanoseconds: Self.requestTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
         return response
@@ -218,7 +236,8 @@ actor CodexClient {
         let response: GetAuthStatusResponseDTO = try await requireTransport().request(
             "getAuthStatus",
             params: GetAuthStatusParams(includeToken: false, refreshToken: refreshToken),
-            response: GetAuthStatusResponseDTO.self
+            response: GetAuthStatusResponseDTO.self,
+            timeoutNanoseconds: Self.requestTimeoutNanoseconds
         )
         scheduleIdleShutdownIfQuiet()
         return response.status
@@ -229,7 +248,8 @@ actor CodexClient {
         let response: LoginAccountResponseDTO = try await requireTransport().request(
             "account/login/start",
             params: LoginAccountParams.chatGPT,
-            response: LoginAccountResponseDTO.self
+            response: LoginAccountResponseDTO.self,
+            timeoutNanoseconds: Self.mutationTimeoutNanoseconds
         )
         if let loginID = response.loginId {
             pendingLoginIDs.insert(loginID)

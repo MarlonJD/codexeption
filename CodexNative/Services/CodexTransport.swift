@@ -70,7 +70,7 @@ actor LineJSONRPCTransport: CodexTransport {
     private var nextID = 1
     private var pending: [RPCID: CheckedContinuation<JSONValue, Error>] = [:]
     private var timeoutTasks: [RPCID: Task<Void, Never>] = [:]
-    private let requestTimeoutNanoseconds: UInt64 = 15_000_000_000
+    private let defaultRequestTimeoutNanoseconds: UInt64 = 60_000_000_000
 
     init(binaryURL: URL) {
         self.binaryURL = binaryURL
@@ -87,6 +87,7 @@ actor LineJSONRPCTransport: CodexTransport {
         let process = Process()
         process.executableURL = binaryURL
         process.arguments = ["app-server", "--listen", "stdio://"]
+        process.environment = ProcessEnvironment.withCommonPaths()
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -140,7 +141,15 @@ actor LineJSONRPCTransport: CodexTransport {
     }
 
     func request<Response: Decodable & Sendable>(_ method: String, response: Response.Type) async throws -> Response {
-        try await request(method, params: Optional<EmptyParams>.none, response: response)
+        try await sendRequest(method, params: Optional<EmptyParams>.none, response: response)
+    }
+
+    func request<Response: Decodable & Sendable>(
+        _ method: String,
+        response: Response.Type,
+        timeoutNanoseconds: UInt64
+    ) async throws -> Response {
+        try await sendRequest(method, params: Optional<EmptyParams>.none, response: response, timeoutNanoseconds: timeoutNanoseconds)
     }
 
     func request<Params: Encodable & Sendable, Response: Decodable & Sendable>(
@@ -148,13 +157,23 @@ actor LineJSONRPCTransport: CodexTransport {
         params: Params,
         response: Response.Type
     ) async throws -> Response {
-        try await request(method, params: Optional(params), response: response)
+        try await sendRequest(method, params: Optional(params), response: response)
     }
 
-    private func request<Params: Encodable & Sendable, Response: Decodable & Sendable>(
+    func request<Params: Encodable & Sendable, Response: Decodable & Sendable>(
+        _ method: String,
+        params: Params,
+        response: Response.Type,
+        timeoutNanoseconds: UInt64
+    ) async throws -> Response {
+        try await sendRequest(method, params: Optional(params), response: response, timeoutNanoseconds: timeoutNanoseconds)
+    }
+
+    private func sendRequest<Params: Encodable & Sendable, Response: Decodable & Sendable>(
         _ method: String,
         params: Params?,
-        response: Response.Type
+        response: Response.Type,
+        timeoutNanoseconds: UInt64? = nil
     ) async throws -> Response {
         let id = RPCID.int(nextID)
         nextID += 1
@@ -162,7 +181,7 @@ actor LineJSONRPCTransport: CodexTransport {
         let paramsValue = try params.map(JSONValue.encoded)
         let request = JSONRPCOutgoingRequest(id: id, method: method, params: paramsValue)
 
-        let timeout = requestTimeoutNanoseconds
+        let timeout = timeoutNanoseconds ?? defaultRequestTimeoutNanoseconds
         let result = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 pending[id] = continuation
@@ -286,6 +305,24 @@ actor LineJSONRPCTransport: CodexTransport {
     private func cancelPendingRequest(id: RPCID) {
         timeoutTasks.removeValue(forKey: id)?.cancel()
         pending.removeValue(forKey: id)?.resume(throwing: CancellationError())
+    }
+}
+
+enum ProcessEnvironment {
+    static func withCommonPaths() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        let commonPaths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        let existingPaths = environment["PATH"]?
+            .split(separator: ":")
+            .map(String.init) ?? []
+        let path = (commonPaths + existingPaths).reduce(into: [String]()) { result, entry in
+            if !result.contains(entry) {
+                result.append(entry)
+            }
+        }
+        environment["PATH"] = path.joined(separator: ":")
+        environment["HOME"] = NSHomeDirectory()
+        return environment
     }
 }
 

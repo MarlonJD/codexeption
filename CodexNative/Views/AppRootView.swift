@@ -195,6 +195,8 @@ struct AuthPill: View {
             "Giris yok"
         case .unknown:
             "Kontrol"
+        case .unavailable:
+            "Auth hata"
         }
     }
 
@@ -208,6 +210,8 @@ struct AuthPill: View {
             .red
         case .unknown:
             .secondary
+        case .unavailable:
+            .orange
         }
     }
 }

@@ -6,7 +6,8 @@ struct ComposerView: View {
     @State private var isImportingImage = false
 
     private var canSend: Bool {
-        !store.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.imageAttachments.isEmpty
+        store.authStatus.canStartTurns
+            && (!store.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.imageAttachments.isEmpty)
     }
 
     var body: some View {

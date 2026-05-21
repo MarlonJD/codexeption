@@ -7,6 +7,12 @@ struct CodexBinaryDiscovery: Equatable, Sendable {
 }
 
 enum CodexBinaryLocator {
+    private static let commonExecutablePaths = [
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex",
+        "/usr/bin/codex"
+    ]
+
     static func discover(userConfiguredPath: String? = nil) -> CodexBinaryDiscovery {
         var checked: [String] = []
 
@@ -18,6 +24,13 @@ enum CodexBinaryLocator {
         }
 
         if let path = runWhichCodex() {
+            checked.append(path)
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return CodexBinaryDiscovery(url: URL(fileURLWithPath: path), checkedPaths: checked)
+            }
+        }
+
+        for path in commonExecutablePaths where !checked.contains(path) {
             checked.append(path)
             if FileManager.default.isExecutableFile(atPath: path) {
                 return CodexBinaryDiscovery(url: URL(fileURLWithPath: path), checkedPaths: checked)
@@ -37,6 +50,7 @@ enum CodexBinaryLocator {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["codex"]
+        process.environment = ProcessEnvironment.withCommonPaths()
 
         let pipe = Pipe()
         process.standardOutput = pipe

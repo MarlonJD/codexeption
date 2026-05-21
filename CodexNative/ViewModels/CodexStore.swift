@@ -79,6 +79,10 @@ final class CodexStore: ObservableObject {
         Task { await loadInitialData() }
     }
 
+    func refreshAuth() {
+        Task { await loadAuthStatus() }
+    }
+
     func selectThread(_ id: String?) {
         selectedThreadID = id
         guard let id else {
@@ -98,6 +102,8 @@ final class CodexStore: ObservableObject {
     }
 
     func createNewThread() {
+        guard ensureCanStartTurns() else { return }
+
         Task {
             await perform { [self] in
                 let thread = try await requireClient().startThread(
@@ -117,6 +123,7 @@ final class CodexStore: ObservableObject {
     func sendCurrentMessage() {
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !imageAttachments.isEmpty else { return }
+        guard ensureCanStartTurns() else { return }
 
         let text = composerText
         let attachments = imageAttachments
@@ -251,10 +258,10 @@ final class CodexStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        await refreshAuthStatus(refreshToken: false, presentError: false)
         await refreshThreadsForBootstrap()
-        await refreshModelsForBootstrap()
         await restoreThreadSelection()
+        await refreshModelsForBootstrap()
+        await refreshAuthStatus(refreshToken: false, presentError: false)
     }
 
     private func loadThreads() async {
@@ -275,10 +282,20 @@ final class CodexStore: ObservableObject {
     }
 
     private func refreshAuthStatus(refreshToken: Bool, presentError: Bool) async {
+        let previousStatus = authStatus
         do {
-            authStatus = try await requireClient().getAuthStatus(refreshToken: refreshToken)
+            let status = try await requireClient().getAuthStatus(refreshToken: refreshToken)
+            if status == .signedOut && !refreshToken {
+                authStatus = try await requireClient().getAuthStatus(refreshToken: true)
+            } else {
+                authStatus = status
+            }
         } catch {
-            authStatus = .signedOut
+            if previousStatus.canStartTurns {
+                authStatus = previousStatus
+            } else {
+                authStatus = .unavailable(error.localizedDescription)
+            }
             if presentError {
                 presentedError = PresentedError(message: error.localizedDescription)
             }
@@ -476,6 +493,18 @@ final class CodexStore: ObservableObject {
     private func requireClient() throws -> CodexClient {
         guard let client else { throw CodexClientError.missingBinary }
         return client
+    }
+
+    private func ensureCanStartTurns() -> Bool {
+        guard authStatus.canStartTurns else {
+            if case .signedOut = authStatus {
+                presentedError = PresentedError(message: "Codex hesabi bagli degil. Once giris yap.")
+            } else {
+                presentedError = PresentedError(message: "Codex auth henuz dogrulanmadi. Hesap durumunu tekrar dene.")
+            }
+            return false
+        }
+        return true
     }
 
     private func perform(_ operation: @MainActor @escaping () async throws -> Void) async {

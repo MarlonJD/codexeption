@@ -293,6 +293,17 @@ struct SidebarAccountCard: View {
                 .controlSize(.small)
                 .buttonStyle(.borderedProminent)
             }
+
+            if case .unavailable = store.authStatus {
+                Button {
+                    store.refreshAuth()
+                } label: {
+                    Text("Tekrar dene")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+            }
         }
         .padding(10)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -312,6 +323,8 @@ struct SidebarAccountCard: View {
             "exclamationmark.circle.fill"
         case .unknown:
             "circle.dotted"
+        case .unavailable:
+            "exclamationmark.triangle.fill"
         }
     }
 
@@ -325,6 +338,8 @@ struct SidebarAccountCard: View {
             .red
         case .unknown:
             .secondary
+        case .unavailable:
+            .orange
         }
     }
 }
