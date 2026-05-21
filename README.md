@@ -72,6 +72,17 @@ The release app product will be created at:
 /private/tmp/codex-native-release/Build/Products/Release/CodexNative.app
 ```
 
+## Release
+
+Signed and notarized macOS releases are published by GitHub Actions when a version tag is pushed:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release asset is uploaded to the repository's GitHub Releases page as a signed and notarized `.app` zip. Setup details for Apple Developer certificates, App Store Connect API keys, GitHub secrets, and release publishing are in [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Test
 
 ```sh

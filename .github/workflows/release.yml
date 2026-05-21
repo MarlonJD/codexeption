@@ -1,0 +1,262 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  signed-notarized-release:
+    name: Signed notarized macOS release
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    env:
+      APP_NAME: CodexNative
+      SCHEME: CodexNative
+      PROJECT: CodexNative.xcodeproj
+      BUNDLE_ID: com.marlonjd.CodexNative
+      ARCHIVE_PATH: ${{ runner.temp }}/CodexNative.xcarchive
+      EXPORT_PATH: ${{ runner.temp }}/export
+      KEYCHAIN_PATH: ${{ runner.temp }}/app-signing.keychain-db
+      KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || 'Developer ID Application' }}
+      APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+            git rev-parse --verify "refs/tags/${TAG}" >/dev/null
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9.]+)?$ ]]; then
+            echo "::error::Release tags must look like v0.1.0 or v0.1.0-beta.1. Got: ${TAG}"
+            exit 1
+          fi
+
+          echo "RELEASE_TAG=${TAG}" >> "${GITHUB_ENV}"
+          echo "RELEASE_VERSION=${TAG#v}" >> "${GITHUB_ENV}"
+
+      - name: Validate Apple signing secrets
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for name in \
+            APPLE_TEAM_ID \
+            APPLE_CERTIFICATE_BASE64 \
+            APPLE_CERTIFICATE_PASSWORD \
+            APP_STORE_CONNECT_API_KEY_ID \
+            APP_STORE_CONNECT_API_ISSUER_ID \
+            APP_STORE_CONNECT_API_KEY_BASE64
+          do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("${name}")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf '::error::Missing required secret(s): %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+      - name: Show toolchain
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Import Developer ID certificate
+        run: |
+          set -euo pipefail
+
+          CERTIFICATE_PATH="${RUNNER_TEMP}/developer-id-application.p12"
+          echo "${APPLE_CERTIFICATE_BASE64}" | base64 --decode > "${CERTIFICATE_PATH}"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security default-keychain -s "${KEYCHAIN_PATH}"
+          security import "${CERTIFICATE_PATH}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "${KEYCHAIN_PATH}"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "${KEYCHAIN_PASSWORD}" \
+            "${KEYCHAIN_PATH}"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration Debug \
+            -destination "platform=macOS"
+
+      - name: Archive Developer ID build
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project "${PROJECT}" \
+            -scheme "${SCHEME}" \
+            -configuration Release \
+            -destination "generic/platform=macOS" \
+            -archivePath "${ARCHIVE_PATH}" \
+            MARKETING_VERSION="${RELEASE_VERSION}" \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}" \
+            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY}" \
+            ENABLE_HARDENED_RUNTIME=YES \
+            ONLY_ACTIVE_ARCH=NO \
+            SKIP_INSTALL=NO
+
+      - name: Export signed app
+        run: |
+          set -euo pipefail
+
+          EXPORT_OPTIONS="${RUNNER_TEMP}/ExportOptions.plist"
+          cat > "${EXPORT_OPTIONS}" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>developer-id</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>signingCertificate</key>
+            <string>${APPLE_SIGNING_IDENTITY}</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath "${ARCHIVE_PATH}" \
+            -exportPath "${EXPORT_PATH}" \
+            -exportOptionsPlist "${EXPORT_OPTIONS}"
+
+          codesign --verify --deep --strict --verbose=2 "${EXPORT_PATH}/${APP_NAME}.app"
+
+      - name: Notarize and staple
+        run: |
+          set -euo pipefail
+
+          APP_PATH="${EXPORT_PATH}/${APP_NAME}.app"
+          NOTARY_DIR="${RUNNER_TEMP}/notary"
+          NOTARY_KEY_PATH="${NOTARY_DIR}/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          NOTARY_ZIP="${RUNNER_TEMP}/${APP_NAME}-${RELEASE_TAG}-notary.zip"
+
+          mkdir -p "${NOTARY_DIR}"
+          echo "${APP_STORE_CONNECT_API_KEY_BASE64}" | base64 --decode > "${NOTARY_KEY_PATH}"
+
+          ditto -c -k --keepParent "${APP_PATH}" "${NOTARY_ZIP}"
+
+          xcrun notarytool submit "${NOTARY_ZIP}" \
+            --key "${NOTARY_KEY_PATH}" \
+            --key-id "${APP_STORE_CONNECT_API_KEY_ID}" \
+            --issuer "${APP_STORE_CONNECT_API_ISSUER_ID}" \
+            --wait
+
+          xcrun stapler staple "${APP_PATH}"
+          xcrun stapler validate "${APP_PATH}"
+          spctl --assess --type execute --verbose=4 "${APP_PATH}"
+
+      - name: Package release asset
+        run: |
+          set -euo pipefail
+
+          APP_PATH="${EXPORT_PATH}/${APP_NAME}.app"
+          ASSET_NAME="${APP_NAME}-${RELEASE_TAG}-macOS-signed-notarized.zip"
+          ASSET_PATH="${RUNNER_TEMP}/${ASSET_NAME}"
+
+          ditto -c -k --keepParent "${APP_PATH}" "${ASSET_PATH}"
+
+          shasum -a 256 "${ASSET_PATH}" > "${ASSET_PATH}.sha256"
+          echo "ASSET_PATH=${ASSET_PATH}" >> "${GITHUB_ENV}"
+          echo "ASSET_SHA_PATH=${ASSET_PATH}.sha256" >> "${GITHUB_ENV}"
+          echo "ASSET_NAME=${ASSET_NAME}" >> "${GITHUB_ENV}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ env.RELEASE_TAG }}-signed-notarized
+          path: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.ASSET_SHA_PATH }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        run: |
+          set -euo pipefail
+
+          NOTES="${RUNNER_TEMP}/release-notes.md"
+          cat > "${NOTES}" <<EOF
+          Signed and notarized macOS release for ${RELEASE_TAG}.
+
+          Bundle ID: ${BUNDLE_ID}
+          Version: ${RELEASE_VERSION}
+
+          Install:
+          1. Download ${ASSET_NAME}.
+          2. Unzip it.
+          3. Move ${APP_NAME}.app to Applications or run it from the extracted folder.
+          EOF
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${ASSET_PATH}" "${ASSET_SHA_PATH}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" \
+              "${ASSET_PATH}" \
+              "${ASSET_SHA_PATH}" \
+              --verify-tag \
+              --title "Codexeption ${RELEASE_TAG}" \
+              --notes-file "${NOTES}"
+          fi
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain "${KEYCHAIN_PATH}" || true
