@@ -55,7 +55,7 @@ struct ComposerView: View {
                     ) {
                         ForEach(store.models) { model in
                             Button(model.displayName) {
-                                store.selectedModelID = model.id
+                                store.selectModel(model.id)
                             }
                         }
                     }
@@ -73,13 +73,17 @@ struct ComposerView: View {
                     }
 
                     ComposerMenu(
-                        title: store.approvalPolicy,
+                        title: store.permissionMode.title,
                         systemImage: "shield",
-                        width: 132
+                        width: 190
                     ) {
-                        Button("on-request") { store.approvalPolicy = "on-request" }
-                        Button("untrusted") { store.approvalPolicy = "untrusted" }
-                        Button("never") { store.approvalPolicy = "never" }
+                        ForEach(PermissionMode.allCases) { mode in
+                            Button {
+                                store.selectPermissionMode(mode)
+                            } label: {
+                                Label(mode.title, systemImage: store.permissionMode == mode ? "checkmark" : mode.systemImage)
+                            }
+                        }
                     }
 
                     Spacer()
@@ -129,11 +133,10 @@ struct ComposerView: View {
     }
 
     private var selectedModelTitle: String {
-        guard let selected = store.selectedModelID,
-              let model = store.models.first(where: { $0.id == selected }) else {
+        guard let selected = store.selectedModelID else {
             return "Model"
         }
-        return model.displayName
+        return store.models.first(where: { $0.id == selected || $0.model == selected })?.displayName ?? selected
     }
 }
 

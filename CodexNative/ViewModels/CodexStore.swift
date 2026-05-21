@@ -26,6 +26,7 @@ final class CodexStore: ObservableObject {
     @Published var selectedModelID: String?
     @Published var selectedReasoningEffort: String = "medium"
     @Published var approvalPolicy: String = "on-request"
+    @Published var permissionMode: PermissionMode = .autoReview
     @Published var pendingApprovals: [ApprovalRequest] = []
     @Published var latestDiff: DiffSnapshot?
     @Published var liveChangeSummary: LiveChangeSummary?
@@ -63,9 +64,10 @@ final class CodexStore: ObservableObject {
     var currentReasoningEfforts: [String] {
         guard let model = models.first(where: { $0.id == selectedModelID || $0.model == selectedModelID }),
               !model.supportedReasoningEfforts.isEmpty else {
-            return ["minimal", "low", "medium", "high", "xhigh"]
+            return ["low", "medium", "high", "xhigh"]
         }
-        return model.supportedReasoningEfforts
+        var seen = Set<String>()
+        return model.supportedReasoningEfforts.filter { seen.insert($0).inserted }
     }
 
     func start(modelContext: ModelContext) {
@@ -101,6 +103,20 @@ final class CodexStore: ObservableObject {
         selectThread(nextThreadID)
     }
 
+    func selectModel(_ id: String) {
+        selectedModelID = id
+        guard let model = models.first(where: { $0.id == id || $0.model == id }) else { return }
+        if !model.supportedReasoningEfforts.isEmpty,
+           !model.supportedReasoningEfforts.contains(selectedReasoningEffort) {
+            selectedReasoningEffort = model.defaultReasoningEffort
+        }
+    }
+
+    func selectPermissionMode(_ mode: PermissionMode) {
+        permissionMode = mode
+        approvalPolicy = mode.approvalPolicy ?? "default"
+    }
+
     func createNewThread() {
         guard ensureCanStartTurns() else { return }
 
@@ -109,7 +125,7 @@ final class CodexStore: ObservableObject {
                 let thread = try await requireClient().startThread(
                     cwd: selectedProject?.path,
                     model: selectedModelID,
-                    approvalPolicy: approvalPolicy
+                    permissionMode: permissionMode
                 )
                 upsertThread(thread)
                 selectedThreadID = thread.id
@@ -139,7 +155,7 @@ final class CodexStore: ObservableObject {
                     let thread = try await requireClient().startThread(
                         cwd: selectedProject?.path,
                         model: selectedModelID,
-                        approvalPolicy: approvalPolicy
+                        permissionMode: permissionMode
                     )
                     upsertThread(thread)
                     selectedThreadID = thread.id
@@ -160,7 +176,7 @@ final class CodexStore: ObservableObject {
                     cwd: selectedProject?.path,
                     model: selectedModelID,
                     effort: selectedReasoningEffort,
-                    approvalPolicy: approvalPolicy
+                    permissionMode: permissionMode
                 )
                 liveChangeSummary = nil
                 appendOrReplaceTurn(turn, threadID: threadID)
@@ -252,6 +268,7 @@ final class CodexStore: ObservableObject {
         selectedModelID = record.selectedModel
         selectedReasoningEffort = record.selectedReasoningEffort
         approvalPolicy = record.approvalPolicy
+        permissionMode = PermissionMode(legacyApprovalPolicy: record.approvalPolicy)
         isInspectorVisible = record.inspectorVisible
 
         if let bookmarks = try? modelContext.fetch(FetchDescriptor<BookmarkRecord>()) {
@@ -346,6 +363,12 @@ final class CodexStore: ObservableObject {
             if selectedModelID == nil || !models.contains(where: { $0.id == selectedModelID || $0.model == selectedModelID }) {
                 selectedModelID = models.first(where: \.isDefault)?.id ?? models.first?.id
             }
+            if let selectedModelID,
+               let model = models.first(where: { $0.id == selectedModelID || $0.model == selectedModelID }),
+               !model.supportedReasoningEfforts.isEmpty,
+               !model.supportedReasoningEfforts.contains(selectedReasoningEffort) {
+                selectedReasoningEffort = model.defaultReasoningEffort
+            }
         } catch {}
     }
 
@@ -428,6 +451,9 @@ final class CodexStore: ObservableObject {
                 await refreshGitStatus(cwd: cwd)
             }
 
+        case .itemUpdated(let threadID, let turnID, let item):
+            upsertItem(threadID: threadID, turnID: turnID, item: item)
+
         case .assistantDelta(let threadID, let turnID, let itemID, let delta):
             appendDelta(threadID: threadID, turnID: turnID, itemID: itemID, kind: .assistant, title: "Codex", delta: delta)
 
@@ -439,6 +465,10 @@ final class CodexStore: ObservableObject {
             if selectedThreadID == snapshot.threadID {
                 liveChangeSummary = snapshot.changeSummary
             }
+
+        case .turnError(let threadID, let turnID, let message):
+            let item = TranscriptItem(id: "error-\(turnID ?? UUID().uuidString)", kind: .system, title: "Codex hatasi", body: message, detail: nil, timestamp: .now)
+            upsertItem(threadID: threadID, turnID: turnID ?? UUID().uuidString, item: item)
 
         case .accountUpdated:
             await loadAuthStatus()
@@ -481,6 +511,25 @@ final class CodexStore: ObservableObject {
         selectedThread = detail
     }
 
+    private func upsertItem(threadID: String, turnID: String, item: TranscriptItem) {
+        guard selectedThreadID == threadID else { return }
+        if selectedThread == nil, let summary = threads.first(where: { $0.id == threadID }) {
+            selectedThread = ThreadDetail(id: threadID, summary: summary, turns: [])
+        }
+
+        guard var detail = selectedThread else { return }
+        if let turnIndex = detail.turns.firstIndex(where: { $0.id == turnID }) {
+            if let itemIndex = detail.turns[turnIndex].items.firstIndex(where: { $0.id == item.id }) {
+                detail.turns[turnIndex].items[itemIndex] = item
+            } else {
+                detail.turns[turnIndex].items.append(item)
+            }
+        } else {
+            detail.turns.append(CodexTurn(id: turnID, status: "running", items: [item], startedAt: .now, completedAt: nil, durationMs: nil))
+        }
+        selectedThread = detail
+    }
+
     private func appendOrReplaceTurn(_ turn: CodexTurn, threadID: String) {
         guard selectedThreadID == threadID else { return }
         if selectedThread == nil, let summary = threads.first(where: { $0.id == threadID }) {
@@ -488,7 +537,11 @@ final class CodexStore: ObservableObject {
         }
         guard var detail = selectedThread else { return }
         if let index = detail.turns.firstIndex(where: { $0.id == turn.id }) {
-            detail.turns[index] = turn
+            var mergedTurn = turn
+            if mergedTurn.items.isEmpty {
+                mergedTurn.items = detail.turns[index].items
+            }
+            detail.turns[index] = mergedTurn
         } else {
             detail.turns.append(turn)
         }

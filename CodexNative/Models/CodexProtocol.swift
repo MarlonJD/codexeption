@@ -55,6 +55,7 @@ struct ThreadStartParams: Encodable, Sendable {
     var modelProvider: String?
     var cwd: String?
     var approvalPolicy: String?
+    var approvalsReviewer: String?
     var sandbox: String?
     var ephemeral: Bool?
     var sessionStartSource: String?
@@ -99,8 +100,14 @@ struct TurnStartParams: Encodable, Sendable {
     let input: [UserInputDTO]
     var cwd: String?
     var approvalPolicy: String?
+    var approvalsReviewer: String?
+    var sandboxPolicy: SandboxPolicyDTO?
     var model: String?
     var effort: String?
+}
+
+struct SandboxPolicyDTO: Codable, Equatable, Sendable {
+    let type: String
 }
 
 struct TurnStartResponseDTO: Decodable, Sendable {
@@ -364,7 +371,11 @@ struct ReasoningEffortDTO: Decodable, Sendable {
         if let raw = try? container.decode(String.self) {
             value = raw
         } else if let object = try? container.decode([String: JSONValue].self) {
-            value = object["effort"]?.stringValue ?? object["value"]?.stringValue ?? object["id"]?.stringValue ?? "medium"
+            value = object["reasoningEffort"]?.stringValue
+                ?? object["effort"]?.stringValue
+                ?? object["value"]?.stringValue
+                ?? object["id"]?.stringValue
+                ?? "medium"
         } else {
             value = "medium"
         }
@@ -421,7 +432,8 @@ extension TranscriptItem {
             return TranscriptItem(id: id, kind: .user, title: "Sen", body: body, detail: nil, timestamp: nil)
 
         case "agentMessage":
-            return TranscriptItem(id: id, kind: .assistant, title: "Codex", body: object["text"]?.stringValue ?? "", detail: nil, timestamp: nil)
+            let body = object["text"]?.stringValue ?? Self.textContent(from: object["content"]?.arrayValue ?? [])
+            return TranscriptItem(id: id, kind: .assistant, title: "Codex", body: body, detail: nil, timestamp: nil)
 
         case "reasoning":
             let summaries = object["summary"]?.arrayValue?.compactMap(\.stringValue) ?? []
@@ -448,6 +460,16 @@ extension TranscriptItem {
         default:
             return TranscriptItem(id: id, kind: .system, title: type, body: value.debugSummary, detail: nil, timestamp: nil)
         }
+    }
+
+    private static func textContent(from content: [JSONValue]) -> String {
+        content.compactMap { item -> String? in
+            guard let object = item.objectValue else { return item.stringValue }
+            return object["text"]?.stringValue
+                ?? object["content"]?.stringValue
+                ?? object["message"]?.stringValue
+        }
+        .joined(separator: "\n")
     }
 }
 

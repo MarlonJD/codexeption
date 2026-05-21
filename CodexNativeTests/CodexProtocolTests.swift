@@ -7,6 +7,8 @@ final class CodexProtocolTests: XCTestCase {
             input: [.text("Merhaba"), .localImage(path: "/tmp/image.png")],
             cwd: "/tmp/project",
             approvalPolicy: "on-request",
+            approvalsReviewer: "auto_review",
+            sandboxPolicy: nil,
             model: "gpt-5.4",
             effort: "medium"
         )
@@ -18,6 +20,37 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(value["input"]?.arrayValue?.first?["text_elements"]?.arrayValue?.count, 0)
         XCTAssertEqual(value["input"]?.arrayValue?.last?["type"]?.stringValue, "localImage")
         XCTAssertEqual(value["input"]?.arrayValue?.last?["path"]?.stringValue, "/tmp/image.png")
+        XCTAssertEqual(value["approvalPolicy"]?.stringValue, "on-request")
+        XCTAssertEqual(value["approvalsReviewer"]?.stringValue, "auto_review")
+    }
+
+    func testModelListDecodesReasoningEffortObjects() throws {
+        let data = """
+        {
+          "data": [
+            {
+              "id": "gpt-5.5",
+              "model": "gpt-5.5",
+              "displayName": "GPT-5.5",
+              "description": "",
+              "hidden": false,
+              "supportedReasoningEfforts": [
+                {"reasoningEffort": "low"},
+                {"reasoningEffort": "medium"},
+                {"reasoningEffort": "high"}
+              ],
+              "defaultReasoningEffort": "medium",
+              "isDefault": true
+            }
+          ],
+          "nextCursor": null
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.codex.decode(ModelListResponseDTO.self, from: data)
+
+        XCTAssertEqual(response.data.first?.supportedReasoningEfforts, ["low", "medium", "high"])
+        XCTAssertEqual(response.data.first?.defaultReasoningEffort, "medium")
     }
 
     func testUnknownNotificationDecodesWithoutTypedSchema() throws {

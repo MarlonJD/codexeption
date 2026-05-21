@@ -137,6 +137,87 @@ enum ApprovalDecision: String, Codable, CaseIterable, Sendable {
     case cancel
 }
 
+enum PermissionMode: String, CaseIterable, Identifiable, Sendable {
+    case defaults
+    case autoReview
+    case fullAccess
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .defaults:
+            "Varsayilan izinler"
+        case .autoReview:
+            "Otomatik inceleme"
+        case .fullAccess:
+            "Tam erisim"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .defaults:
+            "hand.raised"
+        case .autoReview:
+            "terminal"
+        case .fullAccess:
+            "shield"
+        }
+    }
+
+    var approvalPolicy: String? {
+        switch self {
+        case .defaults:
+            nil
+        case .autoReview:
+            "on-request"
+        case .fullAccess:
+            "never"
+        }
+    }
+
+    var approvalsReviewer: String? {
+        switch self {
+        case .defaults, .fullAccess:
+            nil
+        case .autoReview:
+            "auto_review"
+        }
+    }
+
+    var sandboxMode: String? {
+        switch self {
+        case .defaults:
+            nil
+        case .autoReview:
+            "workspace-write"
+        case .fullAccess:
+            "danger-full-access"
+        }
+    }
+
+    var turnSandboxPolicy: SandboxPolicyDTO? {
+        switch self {
+        case .defaults, .autoReview:
+            nil
+        case .fullAccess:
+            SandboxPolicyDTO(type: "dangerFullAccess")
+        }
+    }
+
+    init(legacyApprovalPolicy: String) {
+        switch legacyApprovalPolicy {
+        case "never":
+            self = .fullAccess
+        case "on-request", "untrusted":
+            self = .autoReview
+        default:
+            self = .defaults
+        }
+    }
+}
+
 struct DiffSnapshot: Equatable, Sendable {
     let threadID: String
     let turnID: String

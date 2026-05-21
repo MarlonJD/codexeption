@@ -22,9 +22,11 @@ enum CodexEvent: Sendable {
     case threadStatusChanged(threadID: String, status: String)
     case turnStarted(threadID: String, turn: CodexTurn)
     case turnCompleted(threadID: String, turn: CodexTurn)
+    case itemUpdated(threadID: String, turnID: String, item: TranscriptItem)
     case assistantDelta(threadID: String, turnID: String, itemID: String, delta: String)
     case commandOutputDelta(threadID: String, turnID: String, itemID: String, delta: String)
     case diffUpdated(DiffSnapshot)
+    case turnError(threadID: String, turnID: String?, message: String)
     case accountUpdated
     case accountLoginCompleted(loginID: String?, success: Bool, error: String?)
     case terminated(Int32)
@@ -129,7 +131,7 @@ actor CodexClient {
         return response.thread.detail
     }
 
-    func startThread(cwd: String?, model: String?, approvalPolicy: String?) async throws -> ThreadSummary {
+    func startThread(cwd: String?, model: String?, permissionMode: PermissionMode) async throws -> ThreadSummary {
         try await connect()
         let response: ThreadStartResponseDTO = try await requireTransport().request(
             "thread/start",
@@ -137,8 +139,9 @@ actor CodexClient {
                 model: model,
                 modelProvider: nil,
                 cwd: cwd,
-                approvalPolicy: approvalPolicy,
-                sandbox: "workspace-write",
+                approvalPolicy: permissionMode.approvalPolicy,
+                approvalsReviewer: permissionMode.approvalsReviewer,
+                sandbox: permissionMode.sandboxMode,
                 ephemeral: false,
                 sessionStartSource: nil
             ),
@@ -183,11 +186,20 @@ actor CodexClient {
         scheduleIdleShutdownIfQuiet()
     }
 
-    func startTurn(threadID: String, input: [UserInputDTO], cwd: String?, model: String?, effort: String?, approvalPolicy: String?) async throws -> CodexTurn {
+    func startTurn(threadID: String, input: [UserInputDTO], cwd: String?, model: String?, effort: String?, permissionMode: PermissionMode) async throws -> CodexTurn {
         try await connect()
         let response: TurnStartResponseDTO = try await requireTransport().request(
             "turn/start",
-            params: TurnStartParams(threadId: threadID, input: input, cwd: cwd, approvalPolicy: approvalPolicy, model: model, effort: effort),
+            params: TurnStartParams(
+                threadId: threadID,
+                input: input,
+                cwd: cwd,
+                approvalPolicy: permissionMode.approvalPolicy,
+                approvalsReviewer: permissionMode.approvalsReviewer,
+                sandboxPolicy: permissionMode.turnSandboxPolicy,
+                model: model,
+                effort: effort
+            ),
             response: TurnStartResponseDTO.self,
             timeoutNanoseconds: Self.mutationTimeoutNanoseconds
         )
@@ -340,6 +352,13 @@ actor CodexClient {
                 scheduleIdleShutdownIfQuiet()
             }
 
+        case "item/started", "item/completed":
+            if let threadID = params?["threadId"]?.stringValue,
+               let turnID = params?["turnId"]?.stringValue,
+               let item = params?["item"] {
+                eventContinuation.yield(.itemUpdated(threadID: threadID, turnID: turnID, item: TranscriptItem.fromThreadItem(item)))
+            }
+
         case "item/agentMessage/delta":
             if let threadID = params?["threadId"]?.stringValue,
                let turnID = params?["turnId"]?.stringValue,
@@ -361,6 +380,15 @@ actor CodexClient {
                let turnID = params?["turnId"]?.stringValue,
                let diff = params?["diff"]?.stringValue {
                 eventContinuation.yield(.diffUpdated(DiffSnapshot(threadID: threadID, turnID: turnID, unifiedDiff: diff)))
+            }
+
+        case "error":
+            if let threadID = params?["threadId"]?.stringValue {
+                let turnID = params?["turnId"]?.stringValue
+                let message = params?["error"]?["message"]?.stringValue ?? params?.debugSummary ?? "Codex hatasi"
+                eventContinuation.yield(.turnError(threadID: threadID, turnID: turnID, message: message))
+            } else {
+                eventContinuation.yield(.notification(method: method, params: params))
             }
 
         case "account/updated":
