@@ -213,7 +213,7 @@ final class CodexStore: ObservableObject {
 
         let text = composerText
         let attachments = imageAttachments
-        let cwd = selectedProject?.path
+        let cwd = selectedThread?.summary.cwd ?? selectedProject?.path
         let modelID = selectedModelID
         let effort = selectedReasoningEffort
         let mode = permissionMode
@@ -232,7 +232,9 @@ final class CodexStore: ObservableObject {
         let pending = appendPendingUserTurn(threadID: pendingThreadID, text: text, attachments: attachments)
 
         Task {
-            await perform { [self] in
+            isLoading = true
+            defer { isLoading = false }
+            do {
                 let threadID: String
                 if isNewThread {
                     let thread = try await requireClient().startThread(
@@ -245,6 +247,11 @@ final class CodexStore: ObservableObject {
                     threadID = thread.id
                 } else {
                     threadID = pendingThreadID
+                    _ = try await requireClient().resumeThread(
+                        id: threadID,
+                        model: modelID,
+                        approvalPolicy: mode.approvalPolicy
+                    )
                 }
 
                 var input: [UserInputDTO] = []
@@ -263,6 +270,13 @@ final class CodexStore: ObservableObject {
                 )
                 liveChangeSummary = nil
                 replacePendingTurn(pending.turnID, with: turn, threadID: threadID, fallbackUserItem: pending.userItem)
+            } catch {
+                failPendingTurn(
+                    pending.turnID,
+                    threadID: selectedThreadID ?? pendingThreadID,
+                    message: error.localizedDescription
+                )
+                presentedError = PresentedError(message: error.localizedDescription)
             }
         }
     }
@@ -668,8 +682,7 @@ final class CodexStore: ObservableObject {
             }
 
         case .turnError(let threadID, let turnID, let message):
-            let item = TranscriptItem(id: "error-\(turnID ?? UUID().uuidString)", kind: .system, title: "Codex hatasi", body: message, detail: nil, timestamp: .now)
-            upsertItem(threadID: threadID, turnID: turnID ?? UUID().uuidString, item: item)
+            appendTurnError(threadID: threadID, turnID: turnID, message: message)
 
         case .accountUpdated:
             await loadAuthStatus()
@@ -736,6 +749,59 @@ final class CodexStore: ObservableObject {
             selectedThread = detail
         }
         return (turnID, userItem)
+    }
+
+    private func failPendingTurn(_ pendingTurnID: String, threadID: String, message: String) {
+        guard selectedThreadID == threadID, var detail = selectedThread else { return }
+        let errorItem = TranscriptItem(
+            id: "error-\(pendingTurnID)",
+            kind: .system,
+            title: "Codex hatasi",
+            body: message,
+            detail: nil,
+            timestamp: .now
+        )
+
+        if let index = detail.turns.firstIndex(where: { $0.id == pendingTurnID }) {
+            detail.turns[index].status = "failed"
+            detail.turns[index].completedAt = .now
+            if !detail.turns[index].items.contains(where: { $0.id == errorItem.id }) {
+                detail.turns[index].items.append(errorItem)
+            }
+        } else {
+            detail.turns.append(CodexTurn(id: pendingTurnID, status: "failed", items: [errorItem], startedAt: .now, completedAt: .now, durationMs: nil))
+        }
+        selectedThread = detail
+    }
+
+    private func appendTurnError(threadID: String, turnID: String?, message: String) {
+        guard selectedThreadID == threadID else { return }
+        if selectedThread == nil, let summary = threads.first(where: { $0.id == threadID }) {
+            selectedThread = ThreadDetail(id: threadID, summary: summary, turns: [])
+        }
+        guard var detail = selectedThread else { return }
+
+        let resolvedTurnID = turnID ?? "error-turn-\(UUID().uuidString)"
+        let errorItem = TranscriptItem(
+            id: "error-\(resolvedTurnID)",
+            kind: .system,
+            title: "Codex hatasi",
+            body: message,
+            detail: nil,
+            timestamp: .now
+        )
+
+        if let index = detail.turns.firstIndex(where: { $0.id == resolvedTurnID }) {
+            detail.turns[index].status = "failed"
+            detail.turns[index].completedAt = .now
+            if !detail.turns[index].items.contains(where: { $0.id == errorItem.id }) {
+                detail.turns[index].items.append(errorItem)
+            }
+        } else {
+            detail.turns.append(CodexTurn(id: resolvedTurnID, status: "failed", items: [errorItem], startedAt: .now, completedAt: .now, durationMs: nil))
+        }
+
+        selectedThread = detail
     }
 
     private func replacePendingTurn(_ pendingTurnID: String, with turn: CodexTurn, threadID: String, fallbackUserItem: TranscriptItem) {

@@ -62,31 +62,42 @@ actor CodexClient {
     }
 
     func connect() async throws {
-        if initialized { return }
+        if initialized, transport != nil { return }
         idleTask?.cancel()
 
         let transport = LineJSONRPCTransport(binaryURL: binaryURL)
         self.transport = transport
-        try await transport.start()
-        startEventPump(transport)
+        do {
+            try await transport.start()
+            startEventPump(transport)
 
-        let params = InitializeParams(
-            clientInfo: ClientInfo(name: "codex-native-macos", title: "Codex Native", version: "0.1.0"),
-            capabilities: InitializeCapabilities(
-                experimentalApi: true,
-                requestAttestation: false,
-                optOutNotificationMethods: nil
+            let params = InitializeParams(
+                clientInfo: ClientInfo(name: "codex-native-macos", title: "Codex Native", version: "0.1.0"),
+                capabilities: InitializeCapabilities(
+                    experimentalApi: true,
+                    requestAttestation: false,
+                    optOutNotificationMethods: nil
+                )
             )
-        )
-        let _: InitializeResponse = try await transport.request(
-            "initialize",
-            params: params,
-            response: InitializeResponse.self,
-            timeoutNanoseconds: Self.startupTimeoutNanoseconds
-        )
-        try await transport.notify("initialized")
-        initialized = true
-        scheduleIdleShutdownIfQuiet()
+            let _: InitializeResponse = try await transport.request(
+                "initialize",
+                params: params,
+                response: InitializeResponse.self,
+                timeoutNanoseconds: Self.startupTimeoutNanoseconds
+            )
+            try await transport.notify("initialized")
+            initialized = true
+            scheduleIdleShutdownIfQuiet()
+        } catch {
+            initialized = false
+            eventPump?.cancel()
+            eventPump = nil
+            if self.transport === transport {
+                self.transport = nil
+            }
+            await transport.stop()
+            throw error
+        }
     }
 
     func disconnect() async {
