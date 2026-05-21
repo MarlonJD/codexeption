@@ -116,6 +116,8 @@ actor LineJSONRPCTransport: CodexTransport {
         stderrTask?.cancel()
         readTask = nil
         stderrTask = nil
+        timeoutTasks.values.forEach { $0.cancel() }
+        timeoutTasks.removeAll()
 
         for (_, pending) in pending {
             pending.resume(throwing: CodexTransportError.processNotStarted)
