@@ -4,6 +4,7 @@ import OSLog
 enum CodexTransportError: LocalizedError, Sendable {
     case processNotStarted
     case processExited(Int32)
+    case processExitedWithOutput(Int32, String)
     case malformedMessage(String)
     case rpc(JSONRPCErrorObject)
     case missingResult(RPCID)
@@ -15,6 +16,8 @@ enum CodexTransportError: LocalizedError, Sendable {
             "Codex app-server calismiyor."
         case .processExited(let code):
             "Codex app-server kapandi. Cikis kodu: \(code)."
+        case .processExitedWithOutput(let code, let output):
+            "Codex app-server kapandi. Cikis kodu: \(code). \(output)"
         case .malformedMessage(let line):
             "Gecersiz JSON-RPC mesaji: \(line)"
         case .rpc(let error):
@@ -70,6 +73,7 @@ actor LineJSONRPCTransport: CodexTransport {
     private var nextID = 1
     private var pending: [RPCID: CheckedContinuation<JSONValue, Error>] = [:]
     private var timeoutTasks: [RPCID: Task<Void, Never>] = [:]
+    private var stderrTail: [String] = []
     private let defaultRequestTimeoutNanoseconds: UInt64 = 60_000_000_000
 
     init(binaryURL: URL) {
@@ -98,6 +102,7 @@ actor LineJSONRPCTransport: CodexTransport {
 
         try process.run()
 
+        stderrTail.removeAll()
         self.process = process
         self.input = SendableFileHandle(stdinPipe.fileHandleForWriting)
 
@@ -237,13 +242,16 @@ actor LineJSONRPCTransport: CodexTransport {
             logger.error("stdout read failed: \(error.localizedDescription, privacy: .public)")
         }
 
-        let code = process?.terminationStatus ?? 0
-        continuation.yield(.terminated(code))
+        handleProcessExit()
     }
 
     private func stderrLoop(_ stderr: SendableFileHandle) async {
         do {
             for try await line in stderr.bytes.lines {
+                stderrTail.append(line)
+                if stderrTail.count > 8 {
+                    stderrTail.removeFirst(stderrTail.count - 8)
+                }
                 logger.debug("app-server stderr: \(line, privacy: .public)")
             }
         } catch {
@@ -305,6 +313,30 @@ actor LineJSONRPCTransport: CodexTransport {
     private func cancelPendingRequest(id: RPCID) {
         timeoutTasks.removeValue(forKey: id)?.cancel()
         pending.removeValue(forKey: id)?.resume(throwing: CancellationError())
+    }
+
+    private func handleProcessExit() {
+        let code = process?.terminationStatus ?? 0
+        let output = stderrTail
+            .suffix(4)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        process = nil
+        input = nil
+
+        timeoutTasks.values.forEach { $0.cancel() }
+        timeoutTasks.removeAll()
+
+        let error: Error = output.isEmpty
+            ? CodexTransportError.processExited(code)
+            : CodexTransportError.processExitedWithOutput(code, output)
+        for (_, pending) in pending {
+            pending.resume(throwing: error)
+        }
+        pending.removeAll()
+
+        continuation.yield(.terminated(code))
     }
 }
 

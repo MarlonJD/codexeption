@@ -208,7 +208,12 @@ final class CodexStore: ObservableObject {
             await perform { [self] in
                 let response = try await requireClient().startChatGPTLogin()
                 if let url = response.loginURL {
-                    NSWorkspace.shared.open(url)
+                    let opened = NSWorkspace.shared.open(url)
+                    if !opened {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                        presentedError = PresentedError(message: "Giris baglantisi tarayicida acilamadi. URL panoya kopyalandi.")
+                    }
                 }
                 let message: String
                 if let code = response.userCode {
@@ -258,10 +263,11 @@ final class CodexStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
+        await refreshLocalAuthStatus()
+        await refreshAuthStatus(refreshToken: false, presentError: false)
         await refreshThreadsForBootstrap()
         await restoreThreadSelection()
         await refreshModelsForBootstrap()
-        await refreshAuthStatus(refreshToken: false, presentError: false)
     }
 
     private func loadThreads() async {
@@ -284,14 +290,27 @@ final class CodexStore: ObservableObject {
     private func refreshAuthStatus(refreshToken: Bool, presentError: Bool) async {
         let previousStatus = authStatus
         do {
-            let status = try await requireClient().getAuthStatus(refreshToken: refreshToken)
+            let client = try requireClient()
+            let status = try await client.getAuthStatus(refreshToken: refreshToken)
+            let resolvedStatus: AuthStatus
             if status == .signedOut && !refreshToken {
-                authStatus = try await requireClient().getAuthStatus(refreshToken: true)
+                resolvedStatus = try await client.getAuthStatus(refreshToken: true)
             } else {
-                authStatus = status
+                resolvedStatus = status
+            }
+
+            if resolvedStatus == .signedOut,
+               let localStatus = await client.localLoginStatus(),
+               localStatus.canStartTurns {
+                authStatus = localStatus
+            } else {
+                authStatus = resolvedStatus
             }
         } catch {
-            if previousStatus.canStartTurns {
+            let localStatus = await client?.localLoginStatus()
+            if let localStatus, localStatus.canStartTurns {
+                authStatus = localStatus
+            } else if previousStatus.canStartTurns {
                 authStatus = previousStatus
             } else {
                 authStatus = .unavailable(error.localizedDescription)
@@ -300,6 +319,11 @@ final class CodexStore: ObservableObject {
                 presentedError = PresentedError(message: error.localizedDescription)
             }
         }
+    }
+
+    private func refreshLocalAuthStatus() async {
+        guard let status = await client?.localLoginStatus() else { return }
+        authStatus = status
     }
 
     private func refreshThreadsForBootstrap() async {

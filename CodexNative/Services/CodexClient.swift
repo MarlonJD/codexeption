@@ -243,6 +243,10 @@ actor CodexClient {
         return response.status
     }
 
+    func localLoginStatus() async -> AuthStatus? {
+        await CodexLoginStatusProbe.readStatus(binaryURL: binaryURL)
+    }
+
     func startChatGPTLogin() async throws -> LoginAccountResponseDTO {
         try await connect()
         let response: LoginAccountResponseDTO = try await requireTransport().request(
@@ -457,5 +461,67 @@ extension ApprovalRequest {
                 cwd: cwd
             )
         }
+    }
+}
+
+enum CodexLoginStatusProbe {
+    static func readStatus(binaryURL: URL) async -> AuthStatus? {
+        await Task.detached(priority: .utility) {
+            let process = Process()
+            process.executableURL = binaryURL
+            process.arguments = ["login", "status"]
+            process.environment = ProcessEnvironment.withCommonPaths()
+
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+            } catch {
+                return nil
+            }
+
+            let output = [
+                stdout.fileHandleForReading.readDataToEndOfFile(),
+                stderr.fileHandleForReading.readDataToEndOfFile()
+            ]
+            .compactMap { String(data: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+
+            return parseStatus(output)
+        }.value
+    }
+
+    private static func parseStatus(_ output: String) -> AuthStatus? {
+        let lowercased = output.lowercased()
+        if let range = lowercased.range(of: "logged in using ") {
+            let methodStart = range.upperBound
+            let method = output[methodStart...]
+                .split(whereSeparator: \.isNewline)
+                .first
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return .signedIn(method: normalizedMethod(method))
+        }
+
+        if lowercased.contains("not logged in") || lowercased.contains("not currently logged in") {
+            return .signedOut
+        }
+
+        return nil
+    }
+
+    private static func normalizedMethod(_ method: String?) -> String {
+        guard let method, !method.isEmpty else { return "codex" }
+        if method.localizedCaseInsensitiveContains("chatgpt") {
+            return "chatgpt"
+        }
+        if method.localizedCaseInsensitiveContains("api") {
+            return "apikey"
+        }
+        return method.lowercased()
     }
 }
