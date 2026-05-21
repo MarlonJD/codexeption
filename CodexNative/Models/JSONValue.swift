@@ -158,6 +158,10 @@ struct JSONRPCOutgoingRequest: Encodable, Sendable {
     }
 }
 
+struct JSONRPCOutgoingNotification: Encodable, Sendable {
+    let method: String
+}
+
 struct JSONRPCOutgoingResponse: Encodable, Sendable {
     let id: RPCID
     let result: JSONValue

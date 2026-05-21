@@ -22,7 +22,7 @@ struct AppRootView: View {
 
             case .ready:
                 WorkbenchView()
-                    .frame(minWidth: 1120, minHeight: 720)
+                    .frame(minWidth: 1180, minHeight: 760)
             }
         }
         .task {
@@ -73,7 +73,7 @@ struct WorkbenchView: View {
     var body: some View {
         HStack(spacing: 0) {
             SidebarView()
-                .frame(width: 280)
+                .frame(width: 300)
 
             Divider()
 
@@ -85,6 +85,7 @@ struct WorkbenchView: View {
                 ComposerView()
             }
             .frame(minWidth: 520)
+            .background(Color(nsColor: .windowBackgroundColor))
 
             if store.isInspectorVisible {
                 Divider()
@@ -110,6 +111,7 @@ struct WorkbenchView: View {
                 .help("Inspector")
             }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -117,18 +119,28 @@ struct ThreadHeaderView: View {
     @EnvironmentObject private var store: CodexStore
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(store.selectedThread?.summary.title ?? "Yeni sohbet")
-                    .font(.headline)
+                    .font(.headline.weight(.semibold))
                     .lineLimit(1)
-                Text(store.selectedThread?.summary.cwd ?? store.selectedProject?.path ?? "Proje secilmedi")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    Label(pathTitle, systemImage: "folder")
+                        .lineLimit(1)
+
+                    if let thread = store.selectedThread {
+                        Label(thread.summary.updatedAt.shortCodexString, systemImage: "clock")
+                            .lineLimit(1)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Spacer()
+
+            AuthPill(status: store.authStatus)
 
             if store.isLoading {
                 ProgressView()
@@ -143,8 +155,59 @@ struct ThreadHeaderView: View {
             .help("Aktif turn'u durdur")
             .disabled(store.selectedThread == nil)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+        .frame(height: 64)
         .background(.bar)
+    }
+
+    private var pathTitle: String {
+        if let cwd = store.selectedThread?.summary.cwd ?? store.selectedProject?.path {
+            return URL(fileURLWithPath: cwd).lastPathComponent
+        }
+        return "Tum projeler"
+    }
+}
+
+struct AuthPill: View {
+    let status: AuthStatus
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 7, height: 7)
+            Text(label)
+                .lineLimit(1)
+        }
+        .font(.caption.weight(.medium))
+        .padding(.horizontal, 9)
+        .frame(height: 28)
+        .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+    }
+
+    private var label: String {
+        switch status {
+        case .signedIn(let method):
+            method.uppercased()
+        case .signingIn:
+            "Giris"
+        case .signedOut:
+            "Giris yok"
+        case .unknown:
+            "Kontrol"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .signedIn:
+            .green
+        case .signingIn:
+            .orange
+        case .signedOut:
+            .red
+        case .unknown:
+            .secondary
+        }
     }
 }

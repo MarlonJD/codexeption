@@ -25,6 +25,8 @@ enum CodexEvent: Sendable {
     case assistantDelta(threadID: String, turnID: String, itemID: String, delta: String)
     case commandOutputDelta(threadID: String, turnID: String, itemID: String, delta: String)
     case diffUpdated(DiffSnapshot)
+    case accountUpdated
+    case accountLoginCompleted(loginID: String?, success: Bool, error: String?)
     case terminated(Int32)
     case unknown(method: String?, params: JSONValue?)
 }
@@ -41,6 +43,7 @@ actor CodexClient {
     private var idleTask: Task<Void, Never>?
     private var activeTurnIDs: Set<String> = []
     private var pendingApprovalIDs: Set<RPCID> = []
+    private var pendingLoginIDs: Set<String> = []
     private var initialized = false
 
     init(binaryURL: URL, idleShutdownSeconds: UInt64 = 60) {
@@ -71,6 +74,7 @@ actor CodexClient {
             )
         )
         let _: InitializeResponse = try await transport.request("initialize", params: params, response: InitializeResponse.self)
+        try await transport.notify("initialized")
         initialized = true
         scheduleIdleShutdownIfQuiet()
     }
@@ -209,6 +213,31 @@ actor CodexClient {
         return response
     }
 
+    func getAuthStatus(refreshToken: Bool = false) async throws -> AuthStatus {
+        try await connect()
+        let response: GetAuthStatusResponseDTO = try await requireTransport().request(
+            "getAuthStatus",
+            params: GetAuthStatusParams(includeToken: false, refreshToken: refreshToken),
+            response: GetAuthStatusResponseDTO.self
+        )
+        scheduleIdleShutdownIfQuiet()
+        return response.status
+    }
+
+    func startChatGPTLogin() async throws -> LoginAccountResponseDTO {
+        try await connect()
+        let response: LoginAccountResponseDTO = try await requireTransport().request(
+            "account/login/start",
+            params: LoginAccountParams.chatGPT,
+            response: LoginAccountResponseDTO.self
+        )
+        if let loginID = response.loginId {
+            pendingLoginIDs.insert(loginID)
+        }
+        scheduleIdleShutdownIfQuiet()
+        return response
+    }
+
     func respondToApproval(_ approval: ApprovalRequest, decision: ApprovalDecision) async throws {
         try await connect()
         pendingApprovalIDs.remove(approval.requestID)
@@ -310,6 +339,19 @@ actor CodexClient {
                 eventContinuation.yield(.diffUpdated(DiffSnapshot(threadID: threadID, turnID: turnID, unifiedDiff: diff)))
             }
 
+        case "account/updated":
+            eventContinuation.yield(.accountUpdated)
+
+        case "account/login/completed":
+            let loginID = params?["loginId"]?.stringValue
+            if let loginID {
+                pendingLoginIDs.remove(loginID)
+            }
+            let success = params?["success"]?.boolValue ?? false
+            let error = params?["error"]?.stringValue
+            eventContinuation.yield(.accountLoginCompleted(loginID: loginID, success: success, error: error))
+            scheduleIdleShutdownIfQuiet()
+
         default:
             logger.debug("unknown notification: \(method, privacy: .public)")
             eventContinuation.yield(.notification(method: method, params: params))
@@ -317,7 +359,7 @@ actor CodexClient {
     }
 
     private func scheduleIdleShutdownIfQuiet() {
-        guard activeTurnIDs.isEmpty, pendingApprovalIDs.isEmpty else { return }
+        guard activeTurnIDs.isEmpty, pendingApprovalIDs.isEmpty, pendingLoginIDs.isEmpty else { return }
         idleTask?.cancel()
         idleTask = Task { [weak self, idleShutdownNanoseconds] in
             try? await Task.sleep(nanoseconds: idleShutdownNanoseconds)
@@ -326,7 +368,7 @@ actor CodexClient {
     }
 
     private func disconnectIfStillQuiet() async {
-        guard activeTurnIDs.isEmpty, pendingApprovalIDs.isEmpty else { return }
+        guard activeTurnIDs.isEmpty, pendingApprovalIDs.isEmpty, pendingLoginIDs.isEmpty else { return }
         await disconnect()
     }
 }

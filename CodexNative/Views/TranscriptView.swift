@@ -4,25 +4,45 @@ struct TranscriptView: View {
     @EnvironmentObject private var store: CodexStore
 
     var body: some View {
+        let items = store.selectedThread?.transcriptItems ?? []
+
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if let items = store.selectedThread?.transcriptItems, !items.isEmpty {
+                    if !items.isEmpty {
                         ForEach(items) { item in
                             TranscriptCell(item: item)
                                 .id(item.id)
                         }
+                        if let summary = store.liveChangeSummary, !summary.files.isEmpty {
+                            LiveChangeSummaryView(summary: summary)
+                                .id("live-file-changes")
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                    } else if let summary = store.liveChangeSummary, !summary.files.isEmpty {
+                        LiveChangeSummaryView(summary: summary)
+                            .id("live-file-changes")
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     } else {
                         EmptyTranscriptView()
                     }
                 }
-                .padding(18)
+                .frame(maxWidth: 920, alignment: .leading)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity)
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Color(nsColor: .windowBackgroundColor))
             .onChange(of: store.selectedThread?.transcriptItems.last?.id) { _, id in
                 guard let id else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo(id, anchor: .bottom)
+                }
+            }
+            .onChange(of: store.liveChangeSummary?.totalChangeCount) { _, _ in
+                guard store.liveChangeSummary?.files.isEmpty == false else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("live-file-changes", anchor: .bottom)
                 }
             }
         }
@@ -31,14 +51,25 @@ struct TranscriptView: View {
 
 struct EmptyTranscriptView: View {
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text("Sohbet sec veya yeni bir mesaj yaz")
-                .font(.headline)
+        VStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 32, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 76, height: 64)
+
+            VStack(spacing: 5) {
+                Text("Sohbet sec veya yeni bir mesaj yaz")
+                    .font(.title3.weight(.semibold))
+                Text("Yerel Codex gecmisi yuklenince solda gorunur.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .frame(maxWidth: .infinity, minHeight: 360)
+        .frame(maxWidth: .infinity, minHeight: 420)
     }
 }
 
@@ -49,7 +80,8 @@ struct TranscriptCell: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: iconName)
                 .foregroundStyle(iconColor)
-                .frame(width: 22)
+                .frame(width: 24, height: 24)
+                .background(iconColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -81,9 +113,9 @@ struct TranscriptCell: View {
                         .textSelection(.enabled)
                 }
             }
-            .padding(12)
-            .background(backgroundColor, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.vertical, 2)
         }
+        .padding(.vertical, 6)
     }
 
     private var defaultTitle: String {
@@ -119,16 +151,6 @@ struct TranscriptCell: View {
         }
     }
 
-    private var backgroundColor: Color {
-        switch item.kind {
-        case .user:
-            Color(nsColor: .controlBackgroundColor)
-        case .command:
-            Color(nsColor: .windowBackgroundColor)
-        default:
-            Color(nsColor: .textBackgroundColor)
-        }
-    }
 }
 
 struct MarkdownBlocksView: View {
@@ -143,7 +165,7 @@ struct MarkdownBlocksView: View {
                         .textSelection(.enabled)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 } else {
                     Text(block.content)
                         .textSelection(.enabled)
@@ -189,7 +211,7 @@ struct CommandOutputView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
-                    .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                    .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
         }
     }
@@ -205,5 +227,71 @@ struct FileChangeSummaryView: View {
                     .font(.caption)
             }
         }
+    }
+}
+
+struct LiveChangeSummaryView: View {
+    let summary: LiveChangeSummary
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "pencil")
+                .foregroundStyle(.secondary)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Text("\(summary.fileCount) dosya degistirildi")
+                        .foregroundStyle(.secondary)
+                    AnimatedSignedNumber(value: summary.additions, sign: "+", color: .green)
+                    AnimatedSignedNumber(value: summary.deletions, sign: "-", color: .red)
+                    Spacer()
+                }
+                .font(.subheadline)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(summary.files) { change in
+                        LiveFileChangeRow(change: change)
+                    }
+                }
+            }
+            .padding(12)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .animation(.snappy(duration: 0.28), value: summary)
+    }
+}
+
+struct LiveFileChangeRow: View {
+    let change: LiveFileChange
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(change.displayName)
+                .foregroundStyle(.blue)
+                .lineLimit(1)
+            AnimatedSignedNumber(value: change.additions, sign: "+", color: .green)
+            AnimatedSignedNumber(value: change.deletions, sign: "-", color: .red)
+            Text(change.statusText)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .font(.body)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+struct AnimatedSignedNumber: View {
+    let value: Int
+    let sign: String
+    let color: Color
+
+    var body: some View {
+        Text("\(sign)\(value)")
+            .foregroundStyle(color)
+            .monospacedDigit()
+            .contentTransition(.numericText(value: Double(value)))
+            .animation(.snappy(duration: 0.25), value: value)
     }
 }

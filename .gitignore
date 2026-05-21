@@ -13,3 +13,6 @@ xcuserdata/
 # Local logs
 *.log
 *.xcresult
+
+# Local release products
+Release/

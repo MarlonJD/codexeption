@@ -28,6 +28,21 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(message.params?["answer"]?.intValue, 42)
     }
 
+    func testInitializedNotificationEncodesWithoutRequestID() throws {
+        let data = try JSONEncoder.codex.encode(JSONRPCOutgoingNotification(method: "initialized"))
+        let value = try JSONDecoder.codex.decode(JSONValue.self, from: data)
+
+        XCTAssertEqual(value["method"]?.stringValue, "initialized")
+        XCTAssertNil(value["id"])
+    }
+
+    func testAuthStatusMapsSignedInMethod() throws {
+        let data = #"{"authMethod":"chatgpt","authToken":null,"requiresOpenaiAuth":true}"#.data(using: .utf8)!
+        let response = try JSONDecoder.codex.decode(GetAuthStatusResponseDTO.self, from: data)
+
+        XCTAssertEqual(response.status, .signedIn(method: "chatgpt"))
+    }
+
     func testApprovalRequestMapsCommandRequest() {
         let envelope = ServerRequestEnvelope(
             id: .int(9),
@@ -47,5 +62,36 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(approval.kind, .commandExecution)
         XCTAssertEqual(approval.title, "swift test")
         XCTAssertEqual(approval.cwd, "/tmp/project")
+    }
+
+    func testDiffSnapshotBuildsLiveChangeSummary() {
+        let diff = """
+        diff --git a/CodexNative/Services/CodexClient.swift b/CodexNative/Services/CodexClient.swift
+        index 1111111..2222222 100644
+        --- a/CodexNative/Services/CodexClient.swift
+        +++ b/CodexNative/Services/CodexClient.swift
+        @@ -1,2 +1,3 @@
+         import Foundation
+        +import SwiftUI
+        -let old = true
+        +let new = true
+        diff --git a/CodexNative/Views/LiveView.swift b/CodexNative/Views/LiveView.swift
+        new file mode 100644
+        --- /dev/null
+        +++ b/CodexNative/Views/LiveView.swift
+        @@ -0,0 +1,2 @@
+        +struct LiveView {}
+        +let value = 1
+        """
+
+        let summary = DiffSnapshot(threadID: "t1", turnID: "turn1", unifiedDiff: diff).changeSummary
+
+        XCTAssertEqual(summary.fileCount, 2)
+        XCTAssertEqual(summary.additions, 4)
+        XCTAssertEqual(summary.deletions, 1)
+        XCTAssertEqual(summary.files[0].displayName, "CodexClient.swift")
+        XCTAssertEqual(summary.files[0].state, .modified)
+        XCTAssertEqual(summary.files[1].displayName, "LiveView.swift")
+        XCTAssertEqual(summary.files[1].state, .created)
     }
 }

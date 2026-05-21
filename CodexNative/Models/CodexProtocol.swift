@@ -134,6 +134,45 @@ struct ConfigReadResponseDTO: Decodable, Sendable {
     let layers: [JSONValue]?
 }
 
+struct GetAuthStatusParams: Encodable, Sendable {
+    let includeToken: Bool?
+    let refreshToken: Bool?
+}
+
+struct GetAuthStatusResponseDTO: Decodable, Sendable {
+    let authMethod: String?
+    let authToken: String?
+    let requiresOpenaiAuth: Bool?
+
+    var status: AuthStatus {
+        if let authMethod, !authMethod.isEmpty {
+            return .signedIn(method: authMethod)
+        }
+        return .signedOut
+    }
+}
+
+struct LoginAccountParams: Encodable, Sendable {
+    let type: String
+    var codexStreamlinedLogin: Bool?
+
+    static var chatGPT: LoginAccountParams {
+        LoginAccountParams(type: "chatgpt", codexStreamlinedLogin: true)
+    }
+}
+
+struct LoginAccountResponseDTO: Decodable, Sendable {
+    let type: String
+    let loginId: String?
+    let authUrl: String?
+    let verificationUrl: String?
+    let userCode: String?
+
+    var loginURL: URL? {
+        (authUrl ?? verificationUrl).flatMap(URL.init(string:))
+    }
+}
+
 struct UserInputDTO: Codable, Equatable, Sendable {
     let type: String
     var text: String?

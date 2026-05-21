@@ -44,6 +44,7 @@ protocol CodexTransport: Sendable {
 
     func start() async throws
     func stop() async
+    func notify(_ method: String) async throws
     func request<Response: Decodable & Sendable>(_ method: String, response: Response.Type) async throws -> Response
     func request<Params: Encodable & Sendable, Response: Decodable & Sendable>(
         _ method: String,
@@ -125,6 +126,10 @@ actor LineJSONRPCTransport: CodexTransport {
         let code = process?.terminationStatus ?? 0
         process = nil
         continuation.yield(.terminated(code))
+    }
+
+    func notify(_ method: String) async throws {
+        try write(JSONRPCOutgoingNotification(method: method))
     }
 
     func request<Response: Decodable & Sendable>(_ method: String, response: Response.Type) async throws -> Response {

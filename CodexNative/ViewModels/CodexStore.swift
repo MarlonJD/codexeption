@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftData
 import SwiftUI
@@ -27,6 +28,8 @@ final class CodexStore: ObservableObject {
     @Published var approvalPolicy: String = "on-request"
     @Published var pendingApprovals: [ApprovalRequest] = []
     @Published var latestDiff: DiffSnapshot?
+    @Published var liveChangeSummary: LiveChangeSummary?
+    @Published var authStatus: AuthStatus = .unknown
     @Published var gitStatus: GitStatusSnapshot = .empty
     @Published var isInspectorVisible = true
     @Published var isLoading = false
@@ -43,6 +46,18 @@ final class CodexStore: ObservableObject {
 
     var selectedProject: Project? {
         projects.first { $0.id == selectedProjectID }
+    }
+
+    var visibleThreads: [ThreadSummary] {
+        threads.filter { thread in
+            let projectMatches = selectedProjectID == nil || thread.cwd == selectedProjectID
+            let term = searchTerm.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard projectMatches else { return false }
+            guard !term.isEmpty else { return true }
+            return thread.title.localizedCaseInsensitiveContains(term)
+                || thread.preview.localizedCaseInsensitiveContains(term)
+                || thread.cwd.localizedCaseInsensitiveContains(term)
+        }
     }
 
     var currentReasoningEfforts: [String] {
@@ -68,6 +83,7 @@ final class CodexStore: ObservableObject {
         selectedThreadID = id
         guard let id else {
             selectedThread = nil
+            liveChangeSummary = nil
             return
         }
 
@@ -76,7 +92,9 @@ final class CodexStore: ObservableObject {
 
     func selectProject(_ id: String?) {
         selectedProjectID = id
-        Task { await loadThreads() }
+        liveChangeSummary = nil
+        let nextThreadID = visibleThreads.first?.id
+        selectThread(nextThreadID)
     }
 
     func createNewThread() {
@@ -90,6 +108,7 @@ final class CodexStore: ObservableObject {
                 upsertThread(thread)
                 selectedThreadID = thread.id
                 selectedThread = ThreadDetail(id: thread.id, summary: thread, turns: [])
+                liveChangeSummary = nil
                 await refreshGitStatus(cwd: thread.cwd)
             }
         }
@@ -118,6 +137,7 @@ final class CodexStore: ObservableObject {
                     upsertThread(thread)
                     selectedThreadID = thread.id
                     selectedThread = ThreadDetail(id: thread.id, summary: thread, turns: [])
+                    liveChangeSummary = nil
                     threadID = thread.id
                 }
 
@@ -135,6 +155,7 @@ final class CodexStore: ObservableObject {
                     effort: selectedReasoningEffort,
                     approvalPolicy: approvalPolicy
                 )
+                liveChangeSummary = nil
                 appendOrReplaceTurn(turn, threadID: threadID)
             }
         }
@@ -175,6 +196,24 @@ final class CodexStore: ObservableObject {
         isInspectorVisible.toggle()
     }
 
+    func startChatGPTLogin() {
+        Task {
+            await perform { [self] in
+                let response = try await requireClient().startChatGPTLogin()
+                if let url = response.loginURL {
+                    NSWorkspace.shared.open(url)
+                }
+                let message: String
+                if let code = response.userCode {
+                    message = "Kod: \(code)"
+                } else {
+                    message = "Tarayicida devam et"
+                }
+                authStatus = .signingIn(message)
+            }
+        }
+    }
+
     private func bootstrap(modelContext: ModelContext) async {
         setupState = .checking
         loadPersistedSettings(modelContext: modelContext)
@@ -212,28 +251,41 @@ final class CodexStore: ObservableObject {
         await perform { [self] in
             async let modelsTask = requireClient().listModels()
             async let threadsTask = requireClient().listThreads()
+            async let authTask = requireClient().getAuthStatus()
             models = try await modelsTask
             threads = try await threadsTask
+            authStatus = try await authTask
 
             if selectedModelID == nil {
                 selectedModelID = models.first(where: \.isDefault)?.id ?? models.first?.id
             }
 
             deriveProjects()
-            if selectedProjectID == nil {
-                selectedProjectID = projects.first?.id
+            if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
+                self.selectedProjectID = nil
             }
 
-            if let selectedThreadID {
+            if let selectedThreadID, visibleThreads.contains(where: { $0.id == selectedThreadID }) {
                 await openThread(id: selectedThreadID)
+            } else if let firstThreadID = visibleThreads.first?.id {
+                await openThread(id: firstThreadID)
+            } else {
+                selectedThreadID = nil
+                selectedThread = nil
             }
         }
     }
 
     private func loadThreads() async {
         await perform { [self] in
-            threads = try await requireClient().listThreads(cwd: selectedProject?.path, searchTerm: searchTerm.isEmpty ? nil : searchTerm)
+            threads = try await requireClient().listThreads()
             deriveProjects()
+        }
+    }
+
+    private func loadAuthStatus() async {
+        await perform { [self] in
+            authStatus = try await requireClient().getAuthStatus(refreshToken: true)
         }
     }
 
@@ -242,6 +294,7 @@ final class CodexStore: ObservableObject {
             let detail = try await requireClient().readThread(id: id)
             selectedThread = detail
             selectedThreadID = id
+            liveChangeSummary = nil
             await refreshGitStatus(cwd: detail.summary.cwd)
         }
     }
@@ -286,6 +339,9 @@ final class CodexStore: ObservableObject {
             }
 
         case .turnStarted(let threadID, let turn):
+            if selectedThreadID == threadID {
+                liveChangeSummary = nil
+            }
             appendOrReplaceTurn(turn, threadID: threadID)
 
         case .turnCompleted(let threadID, let turn):
@@ -302,6 +358,22 @@ final class CodexStore: ObservableObject {
 
         case .diffUpdated(let snapshot):
             latestDiff = snapshot
+            if selectedThreadID == snapshot.threadID {
+                liveChangeSummary = snapshot.changeSummary
+            }
+
+        case .accountUpdated:
+            await loadAuthStatus()
+
+        case .accountLoginCompleted(_, let success, let error):
+            if success {
+                await loadAuthStatus()
+            } else {
+                authStatus = .signedOut
+                if let error, !error.isEmpty {
+                    presentedError = PresentedError(message: error)
+                }
+            }
 
         case .terminated:
             break

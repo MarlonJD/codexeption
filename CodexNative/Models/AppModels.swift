@@ -26,6 +26,39 @@ struct ThreadSummary: Identifiable, Hashable, Sendable {
     let updatedAt: Date
 }
 
+enum AuthStatus: Equatable, Sendable {
+    case unknown
+    case signedOut
+    case signingIn(String)
+    case signedIn(method: String)
+
+    var title: String {
+        switch self {
+        case .unknown:
+            "Hesap kontrol ediliyor"
+        case .signedOut:
+            "Giris gerekli"
+        case .signingIn:
+            "Giris bekleniyor"
+        case .signedIn(let method):
+            "\(method.uppercased()) bagli"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .unknown:
+            "Codex auth okunuyor"
+        case .signedOut:
+            "Codex hesabi bulunamadi"
+        case .signingIn(let message):
+            message
+        case .signedIn:
+            "Yerel Codex oturumu hazir"
+        }
+    }
+}
+
 struct ThreadDetail: Identifiable, Sendable {
     let id: String
     var summary: ThreadSummary
@@ -107,6 +140,112 @@ struct DiffSnapshot: Equatable, Sendable {
                 let raw = String(parts[3])
                 return raw.hasPrefix("b/") ? String(raw.dropFirst(2)) : raw
             }
+    }
+
+    var changeSummary: LiveChangeSummary {
+        LiveChangeSummary(threadID: threadID, turnID: turnID, files: LiveChangeSummary.parse(unifiedDiff: unifiedDiff))
+    }
+}
+
+struct LiveChangeSummary: Equatable, Sendable {
+    let threadID: String
+    let turnID: String
+    var files: [LiveFileChange]
+
+    var id: String { "\(threadID)-\(turnID)" }
+    var fileCount: Int { files.count }
+    var additions: Int { files.reduce(0) { $0 + $1.additions } }
+    var deletions: Int { files.reduce(0) { $0 + $1.deletions } }
+    var totalChangeCount: Int { additions + deletions + fileCount }
+
+    static func parse(unifiedDiff: String) -> [LiveFileChange] {
+        var changes: [LiveFileChange] = []
+        var currentPath: String?
+        var additions = 0
+        var deletions = 0
+        var state = LiveFileChange.State.modified
+
+        func finishCurrentFile() {
+            guard let currentPath else { return }
+            changes.append(
+                LiveFileChange(
+                    path: currentPath,
+                    additions: additions,
+                    deletions: deletions,
+                    state: state
+                )
+            )
+        }
+
+        for line in unifiedDiff.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if line.hasPrefix("diff --git ") {
+                finishCurrentFile()
+                currentPath = Self.pathFromDiffHeader(line)
+                additions = 0
+                deletions = 0
+                state = .modified
+                continue
+            }
+
+            guard currentPath != nil else { continue }
+
+            if line.hasPrefix("new file mode") {
+                state = .created
+            } else if line.hasPrefix("deleted file mode") {
+                state = .deleted
+            } else if line.hasPrefix("rename from ") || line.hasPrefix("rename to ") {
+                state = .renamed
+            } else if line.hasPrefix("+++") || line.hasPrefix("---") {
+                continue
+            } else if line.hasPrefix("+") {
+                additions += 1
+            } else if line.hasPrefix("-") {
+                deletions += 1
+            }
+        }
+
+        finishCurrentFile()
+        return changes
+    }
+
+    private static func pathFromDiffHeader(_ line: String) -> String {
+        let parts = line.split(separator: " ")
+        guard parts.count >= 4 else { return line }
+        let rawPath = String(parts[3])
+        return rawPath.hasPrefix("b/") ? String(rawPath.dropFirst(2)) : rawPath
+    }
+}
+
+struct LiveFileChange: Identifiable, Equatable, Sendable {
+    enum State: String, Equatable, Sendable {
+        case created
+        case modified
+        case deleted
+        case renamed
+    }
+
+    let path: String
+    var additions: Int
+    var deletions: Int
+    var state: State
+
+    var id: String { path }
+
+    var displayName: String {
+        URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    var statusText: String {
+        switch state {
+        case .created:
+            "olusturuluyor"
+        case .modified:
+            "degistiriliyor"
+        case .deleted:
+            "siliniyor"
+        case .renamed:
+            "yeniden adlandiriliyor"
+        }
     }
 }
 
