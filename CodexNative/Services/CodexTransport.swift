@@ -7,6 +7,7 @@ enum CodexTransportError: LocalizedError, Sendable {
     case malformedMessage(String)
     case rpc(JSONRPCErrorObject)
     case missingResult(RPCID)
+    case requestTimedOut(method: String)
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +21,8 @@ enum CodexTransportError: LocalizedError, Sendable {
             "Codex RPC hatasi \(error.code): \(error.message)"
         case .missingResult(let id):
             "RPC yaniti sonuc icermiyor: \(id)"
+        case .requestTimedOut(let method):
+            "Codex RPC yaniti zaman asimina ugradi: \(method)."
         }
     }
 }
@@ -66,6 +69,8 @@ actor LineJSONRPCTransport: CodexTransport {
     private var stderrTask: Task<Void, Never>?
     private var nextID = 1
     private var pending: [RPCID: CheckedContinuation<JSONValue, Error>] = [:]
+    private var timeoutTasks: [RPCID: Task<Void, Never>] = [:]
+    private let requestTimeoutNanoseconds: UInt64 = 15_000_000_000
 
     init(binaryURL: URL) {
         self.binaryURL = binaryURL
@@ -155,13 +160,23 @@ actor LineJSONRPCTransport: CodexTransport {
         let paramsValue = try params.map(JSONValue.encoded)
         let request = JSONRPCOutgoingRequest(id: id, method: method, params: paramsValue)
 
-        let result = try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            do {
-                try write(request)
-            } catch {
-                pending.removeValue(forKey: id)
-                continuation.resume(throwing: error)
+        let timeout = requestTimeoutNanoseconds
+        let result = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                pending[id] = continuation
+                timeoutTasks[id] = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: timeout)
+                    await self?.timeoutPendingRequest(id: id, method: method)
+                }
+                do {
+                    try write(request)
+                } catch {
+                    finishPendingRequest(id: id, throwing: error)
+                }
+            }
+        } onCancel: {
+            Task { [weak self] in
+                await self?.cancelPendingRequest(id: id)
             }
         }
 
@@ -225,12 +240,12 @@ actor LineJSONRPCTransport: CodexTransport {
             let message = try JSONDecoder.codex.decode(JSONRPCIncomingMessage.self, from: data)
 
             if let id = message.id, let error = message.error {
-                pending.removeValue(forKey: id)?.resume(throwing: CodexTransportError.rpc(error))
+                finishPendingRequest(id: id, throwing: CodexTransportError.rpc(error))
                 return
             }
 
             if let id = message.id, message.result != nil {
-                pending.removeValue(forKey: id)?.resume(returning: message.result ?? .null)
+                finishPendingRequest(id: id, returning: message.result ?? .null)
                 return
             }
 
@@ -249,6 +264,26 @@ actor LineJSONRPCTransport: CodexTransport {
             logger.error("failed to decode JSON-RPC line: \(line, privacy: .public)")
             continuation.yield(.unknown(JSONRPCIncomingMessage(id: nil, method: nil, params: .string(line), result: nil, error: nil)))
         }
+    }
+
+    private func finishPendingRequest(id: RPCID, returning result: JSONValue) {
+        timeoutTasks.removeValue(forKey: id)?.cancel()
+        pending.removeValue(forKey: id)?.resume(returning: result)
+    }
+
+    private func finishPendingRequest(id: RPCID, throwing error: Error) {
+        timeoutTasks.removeValue(forKey: id)?.cancel()
+        pending.removeValue(forKey: id)?.resume(throwing: error)
+    }
+
+    private func timeoutPendingRequest(id: RPCID, method: String) {
+        timeoutTasks.removeValue(forKey: id)
+        pending.removeValue(forKey: id)?.resume(throwing: CodexTransportError.requestTimedOut(method: method))
+    }
+
+    private func cancelPendingRequest(id: RPCID) {
+        timeoutTasks.removeValue(forKey: id)?.cancel()
+        pending.removeValue(forKey: id)?.resume(throwing: CancellationError())
     }
 }
 

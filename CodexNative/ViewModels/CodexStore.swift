@@ -248,32 +248,13 @@ final class CodexStore: ObservableObject {
     }
 
     private func loadInitialData() async {
-        await perform { [self] in
-            async let modelsTask = requireClient().listModels()
-            async let threadsTask = requireClient().listThreads()
-            async let authTask = requireClient().getAuthStatus()
-            models = try await modelsTask
-            threads = try await threadsTask
-            authStatus = try await authTask
+        isLoading = true
+        defer { isLoading = false }
 
-            if selectedModelID == nil {
-                selectedModelID = models.first(where: \.isDefault)?.id ?? models.first?.id
-            }
-
-            deriveProjects()
-            if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
-                self.selectedProjectID = nil
-            }
-
-            if let selectedThreadID, visibleThreads.contains(where: { $0.id == selectedThreadID }) {
-                await openThread(id: selectedThreadID)
-            } else if let firstThreadID = visibleThreads.first?.id {
-                await openThread(id: firstThreadID)
-            } else {
-                selectedThreadID = nil
-                selectedThread = nil
-            }
-        }
+        await refreshAuthStatus(refreshToken: false, presentError: false)
+        await refreshThreadsForBootstrap()
+        await refreshModelsForBootstrap()
+        await restoreThreadSelection()
     }
 
     private func loadThreads() async {
@@ -284,19 +265,75 @@ final class CodexStore: ObservableObject {
     }
 
     private func loadAuthStatus() async {
-        await perform { [self] in
-            authStatus = try await requireClient().getAuthStatus(refreshToken: true)
-        }
+        await refreshAuthStatus(refreshToken: true, presentError: true)
     }
 
     private func openThread(id: String) async {
         await perform { [self] in
-            let detail = try await requireClient().readThread(id: id)
-            selectedThread = detail
-            selectedThreadID = id
-            liveChangeSummary = nil
-            await refreshGitStatus(cwd: detail.summary.cwd)
+            try await loadThreadDetail(id: id)
         }
+    }
+
+    private func refreshAuthStatus(refreshToken: Bool, presentError: Bool) async {
+        do {
+            authStatus = try await requireClient().getAuthStatus(refreshToken: refreshToken)
+        } catch {
+            authStatus = .signedOut
+            if presentError {
+                presentedError = PresentedError(message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func refreshThreadsForBootstrap() async {
+        do {
+            threads = try await requireClient().listThreads()
+            deriveProjects()
+            if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
+                self.selectedProjectID = nil
+            }
+        } catch {
+            selectedThreadID = nil
+            selectedThread = nil
+            presentedError = PresentedError(message: "Sohbetler yuklenemedi: \(error.localizedDescription)")
+        }
+    }
+
+    private func refreshModelsForBootstrap() async {
+        do {
+            models = try await requireClient().listModels()
+            if selectedModelID == nil || !models.contains(where: { $0.id == selectedModelID || $0.model == selectedModelID }) {
+                selectedModelID = models.first(where: \.isDefault)?.id ?? models.first?.id
+            }
+        } catch {}
+    }
+
+    private func restoreThreadSelection() async {
+        guard let threadID = selectedThreadID.flatMap({ id in
+            visibleThreads.contains(where: { $0.id == id }) ? id : nil
+        }) ?? visibleThreads.first?.id else {
+            selectedThreadID = nil
+            selectedThread = nil
+            liveChangeSummary = nil
+            return
+        }
+
+        do {
+            try await loadThreadDetail(id: threadID)
+        } catch {
+            selectedThreadID = nil
+            selectedThread = nil
+            liveChangeSummary = nil
+            presentedError = PresentedError(message: "Sohbet acilamadi: \(error.localizedDescription)")
+        }
+    }
+
+    private func loadThreadDetail(id: String) async throws {
+        let detail = try await requireClient().readThread(id: id)
+        selectedThread = detail
+        selectedThreadID = id
+        liveChangeSummary = nil
+        await refreshGitStatus(cwd: detail.summary.cwd)
     }
 
     private func refreshGitStatus(cwd: String) async {
