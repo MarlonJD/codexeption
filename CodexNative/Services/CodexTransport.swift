@@ -135,6 +135,7 @@ actor LineJSONRPCTransport: CodexTransport {
 
         if let process, process.isRunning {
             process.terminate()
+            process.waitUntilExit()
         }
         let code = process?.terminationStatus ?? 0
         process = nil
@@ -316,7 +317,15 @@ actor LineJSONRPCTransport: CodexTransport {
     }
 
     private func handleProcessExit() {
-        let code = process?.terminationStatus ?? 0
+        let code: Int32
+        if let process {
+            if process.isRunning {
+                process.waitUntilExit()
+            }
+            code = process.terminationStatus
+        } else {
+            code = 0
+        }
         let output = stderrTail
             .suffix(4)
             .joined(separator: " ")

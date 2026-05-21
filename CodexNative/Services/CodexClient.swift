@@ -35,9 +35,9 @@ enum CodexEvent: Sendable {
 
 actor CodexClient {
     nonisolated let events: AsyncStream<CodexEvent>
-    private static let startupTimeoutNanoseconds: UInt64 = 60_000_000_000
-    private static let requestTimeoutNanoseconds: UInt64 = 60_000_000_000
-    private static let mutationTimeoutNanoseconds: UInt64 = 180_000_000_000
+    private static let startupTimeoutNanoseconds: UInt64 = 25_000_000_000
+    private static let requestTimeoutNanoseconds: UInt64 = 25_000_000_000
+    private static let mutationTimeoutNanoseconds: UInt64 = 45_000_000_000
 
     private let binaryURL: URL
     private let idleShutdownNanoseconds: UInt64
@@ -507,7 +507,15 @@ enum CodexLoginStatusProbe {
 
             do {
                 try process.run()
+                let processBox = SendableProcess(process)
+                let watchdog = Task {
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
+                    if processBox.process.isRunning {
+                        processBox.process.terminate()
+                    }
+                }
                 process.waitUntilExit()
+                watchdog.cancel()
             } catch {
                 return nil
             }
@@ -551,5 +559,13 @@ enum CodexLoginStatusProbe {
             return "apikey"
         }
         return method.lowercased()
+    }
+}
+
+private struct SendableProcess: @unchecked Sendable {
+    let process: Process
+
+    init(_ process: Process) {
+        self.process = process
     }
 }

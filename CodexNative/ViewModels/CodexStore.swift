@@ -118,22 +118,11 @@ final class CodexStore: ObservableObject {
     }
 
     func createNewThread() {
-        guard ensureCanStartTurns() else { return }
-
-        Task {
-            await perform { [self] in
-                let thread = try await requireClient().startThread(
-                    cwd: selectedProject?.path,
-                    model: selectedModelID,
-                    permissionMode: permissionMode
-                )
-                upsertThread(thread)
-                selectedThreadID = thread.id
-                selectedThread = ThreadDetail(id: thread.id, summary: thread, turns: [])
-                liveChangeSummary = nil
-                await refreshGitStatus(cwd: thread.cwd)
-            }
-        }
+        selectedThreadID = nil
+        selectedThread = nil
+        liveChangeSummary = nil
+        composerText = ""
+        imageAttachments.removeAll()
     }
 
     func sendCurrentMessage() {
@@ -278,19 +267,28 @@ final class CodexStore: ObservableObject {
 
     private func loadInitialData() async {
         isLoading = true
-        defer { isLoading = false }
 
         await refreshLocalAuthStatus()
-        await refreshAuthStatus(refreshToken: false, presentError: false)
-        await refreshThreadsForBootstrap()
-        await restoreThreadSelection()
-        await refreshModelsForBootstrap()
+        await loadLocalThreadFallback()
+        applyFallbackModelsIfNeeded()
+        isLoading = false
+
+        Task { await refreshAuthStatus(refreshToken: false, presentError: false) }
+        Task { await refreshModelsForBootstrap() }
+        Task { await refreshThreadsForBootstrap() }
     }
 
     private func loadThreads() async {
         await perform { [self] in
-            threads = try await requireClient().listThreads()
-            deriveProjects()
+            do {
+                applyThreadSummaries(try await requireClient().listThreads())
+                await restoreThreadSelection()
+            } catch {
+                await loadLocalThreadFallback()
+                if threads.isEmpty {
+                    throw error
+                }
+            }
         }
     }
 
@@ -345,31 +343,78 @@ final class CodexStore: ObservableObject {
 
     private func refreshThreadsForBootstrap() async {
         do {
-            threads = try await requireClient().listThreads()
-            deriveProjects()
-            if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
-                self.selectedProjectID = nil
-            }
+            applyThreadSummaries(try await requireClient().listThreads())
+            await restoreThreadSelection()
         } catch {
-            selectedThreadID = nil
-            selectedThread = nil
-            presentedError = PresentedError(message: "Sohbetler yuklenemedi: \(error.localizedDescription)")
+            if threads.isEmpty {
+                await loadLocalThreadFallback()
+            }
+            if threads.isEmpty {
+                selectedThreadID = nil
+                selectedThread = nil
+                presentedError = PresentedError(message: "Sohbetler yuklenemedi: \(error.localizedDescription)")
+            }
         }
     }
 
     private func refreshModelsForBootstrap() async {
+        applyFallbackModelsIfNeeded()
         do {
             models = try await requireClient().listModels()
-            if selectedModelID == nil || !models.contains(where: { $0.id == selectedModelID || $0.model == selectedModelID }) {
-                selectedModelID = models.first(where: \.isDefault)?.id ?? models.first?.id
-            }
-            if let selectedModelID,
-               let model = models.first(where: { $0.id == selectedModelID || $0.model == selectedModelID }),
-               !model.supportedReasoningEfforts.isEmpty,
-               !model.supportedReasoningEfforts.contains(selectedReasoningEffort) {
-                selectedReasoningEffort = model.defaultReasoningEffort
-            }
-        } catch {}
+            normalizeSelectedModel()
+        } catch {
+            applyFallbackModelsIfNeeded()
+        }
+    }
+
+    private func loadLocalThreadFallback() async {
+        let localThreads = await LocalCodexHistoryReader.readSummaries()
+        guard !localThreads.isEmpty else { return }
+        applyThreadSummaries(localThreads)
+        restoreLocalThreadSelection()
+    }
+
+    private func applyThreadSummaries(_ summaries: [ThreadSummary]) {
+        threads = summaries
+        deriveProjects()
+        if let selectedProjectID, !projects.contains(where: { $0.id == selectedProjectID }) {
+            self.selectedProjectID = nil
+        }
+    }
+
+    private func restoreLocalThreadSelection() {
+        guard let threadID = selectedThreadID.flatMap({ id in
+            visibleThreads.contains(where: { $0.id == id }) ? id : nil
+        }) ?? visibleThreads.first?.id,
+              let summary = threads.first(where: { $0.id == threadID }) else {
+            selectedThreadID = nil
+            selectedThread = nil
+            liveChangeSummary = nil
+            return
+        }
+
+        selectedThreadID = threadID
+        if selectedThread?.id != threadID {
+            selectedThread = ThreadDetail(id: threadID, summary: summary, turns: [])
+        }
+    }
+
+    private func applyFallbackModelsIfNeeded() {
+        guard models.isEmpty else { return }
+        models = ModelOption.fallbackOptions
+        normalizeSelectedModel()
+    }
+
+    private func normalizeSelectedModel() {
+        if selectedModelID == nil || !models.contains(where: { $0.id == selectedModelID || $0.model == selectedModelID }) {
+            selectedModelID = models.first(where: \.isDefault)?.id ?? models.first?.id
+        }
+        if let selectedModelID,
+           let model = models.first(where: { $0.id == selectedModelID || $0.model == selectedModelID }),
+           !model.supportedReasoningEfforts.isEmpty,
+           !model.supportedReasoningEfforts.contains(selectedReasoningEffort) {
+            selectedReasoningEffort = model.defaultReasoningEffort
+        }
     }
 
     private func restoreThreadSelection() async {

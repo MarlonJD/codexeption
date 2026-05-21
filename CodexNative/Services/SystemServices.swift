@@ -70,6 +70,161 @@ enum CodexBinaryLocator {
     }
 }
 
+enum LocalCodexHistoryReader {
+    static func readSummaries(limit: Int = 200) async -> [ThreadSummary] {
+        await Task.detached(priority: .utility) {
+            readSummariesSync(limit: limit)
+        }.value
+    }
+
+    private static func readSummariesSync(limit: Int) -> [ThreadSummary] {
+        let fileManager = FileManager.default
+        let sessionsRoot = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex")
+            .appendingPathComponent("sessions")
+
+        guard let enumerator = fileManager.enumerator(
+            at: sessionsRoot,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var summaries: [ThreadSummary] = []
+        for case let url as URL in enumerator where url.pathExtension == "jsonl" {
+            if let summary = readSummary(url: url) {
+                summaries.append(summary)
+            }
+        }
+
+        return Array(summaries.sorted { $0.updatedAt > $1.updatedAt }.prefix(limit))
+    }
+
+    private static func readSummary(url: URL) -> ThreadSummary? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+
+        let data = (try? handle.read(upToCount: 512_000)) ?? Data()
+        guard !data.isEmpty,
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        let lines = text.split(separator: "\n", maxSplits: 120, omittingEmptySubsequences: true)
+        guard !lines.isEmpty else { return nil }
+
+        var id: String?
+        var cwd: String?
+        var modelProvider = "openai"
+        var createdAt: Date?
+        var preview: String?
+
+        for line in lines {
+            guard let value = decodeLine(String(line)),
+                  let object = value.objectValue else {
+                continue
+            }
+
+            if object["type"]?.stringValue == "session_meta",
+               let payload = object["payload"]?.objectValue {
+                id = payload["id"]?.stringValue ?? id
+                cwd = payload["cwd"]?.stringValue ?? cwd
+                modelProvider = payload["model_provider"]?.stringValue ?? modelProvider
+                createdAt = parseDate(payload["timestamp"]?.stringValue ?? object["timestamp"]?.stringValue) ?? createdAt
+                continue
+            }
+
+            guard preview == nil,
+                  object["type"]?.stringValue == "response_item",
+                  let payload = object["payload"]?.objectValue,
+                  payload["type"]?.stringValue == "message",
+                  payload["role"]?.stringValue == "user" else {
+                continue
+            }
+
+            let candidate = textContent(from: payload["content"]?.arrayValue ?? [])
+            if isUserVisible(candidate) {
+                preview = cleaned(candidate)
+            }
+        }
+
+        guard let id else { return nil }
+        let fallbackDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .now
+        let updatedAt = fallbackDate
+        let created = createdAt ?? updatedAt
+        let body = preview ?? url.deletingPathExtension().lastPathComponent
+        let title = titleFromPreview(body)
+
+        return ThreadSummary(
+            id: id,
+            title: title,
+            preview: body,
+            cwd: cwd ?? fileManagerHomePath(),
+            modelProvider: modelProvider,
+            status: "local",
+            createdAt: created,
+            updatedAt: updatedAt
+        )
+    }
+
+    private static func decodeLine(_ line: String) -> JSONValue? {
+        guard let data = line.data(using: .utf8) else { return nil }
+        return try? JSONDecoder.codex.decode(JSONValue.self, from: data)
+    }
+
+    private static func textContent(from content: [JSONValue]) -> String {
+        content.compactMap { item -> String? in
+            guard let object = item.objectValue else { return item.stringValue }
+            guard object["type"]?.stringValue == "input_text" else { return nil }
+            return object["text"]?.stringValue
+        }
+        .joined(separator: "\n")
+    }
+
+    private static func isUserVisible(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !trimmed.hasPrefix("<environment_context>") else { return false }
+        guard !trimmed.hasPrefix("<developer_instructions>") else { return false }
+        guard !trimmed.hasPrefix("<permissions instructions>") else { return false }
+        guard !trimmed.hasPrefix("<app-context>") else { return false }
+        guard !trimmed.hasPrefix("<skills_instructions>") else { return false }
+        return true
+    }
+
+    private static func cleaned(_ text: String) -> String {
+        let singleLine = text
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return String(singleLine.prefix(260))
+    }
+
+    private static func titleFromPreview(_ preview: String) -> String {
+        let trimmed = preview.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Adsiz sohbet" }
+        return String(trimmed.prefix(80))
+    }
+
+    private static func parseDate(_ raw: String?) -> Date? {
+        guard let raw else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: raw) {
+            return date
+        }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: raw)
+    }
+
+    private static func fileManagerHomePath() -> String {
+        FileManager.default.homeDirectoryForCurrentUser.path
+    }
+}
+
 struct GitStatusSnapshot: Equatable, Sendable {
     var cwd: String
     var branch: String?

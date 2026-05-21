@@ -350,6 +350,36 @@ struct ModelOption: Identifiable, Hashable, Sendable {
     let supportedReasoningEfforts: [String]
     let defaultReasoningEffort: String
     let isDefault: Bool
+
+    static let fallbackOptions: [ModelOption] = [
+        ModelOption(
+            id: "gpt-5.5",
+            model: "gpt-5.5",
+            displayName: "GPT-5.5",
+            description: "Frontier model for complex coding, research, and real-world work.",
+            supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+            defaultReasoningEffort: "medium",
+            isDefault: true
+        ),
+        ModelOption(
+            id: "gpt-5.4",
+            model: "gpt-5.4",
+            displayName: "gpt-5.4",
+            description: "Strong model for everyday coding.",
+            supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+            defaultReasoningEffort: "medium",
+            isDefault: false
+        ),
+        ModelOption(
+            id: "gpt-5.4-mini",
+            model: "gpt-5.4-mini",
+            displayName: "GPT-5.4-Mini",
+            description: "Small, fast, and cost-efficient model for simpler coding tasks.",
+            supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+            defaultReasoningEffort: "medium",
+            isDefault: false
+        )
+    ]
 }
 
 struct AppSettings: Equatable, Sendable {
